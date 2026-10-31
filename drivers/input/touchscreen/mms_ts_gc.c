@@ -16,7 +16,13 @@
  */
 
 #define SHOW_COORD		1
-#define FW_UPDATABLE		1
+/*
+ * gd1: never flash the touch controller from the kernel. Samsung's boot
+ * path compares versions and even forces an ISC/ISP download when it reads
+ * version 0x00 (e.g. after an I2C glitch); an interrupted download can leave
+ * the touch controller dead. The controller keeps its factory firmware.
+ */
+#define FW_UPDATABLE		0
 #define ISC_DL_MODE		1
 #define TOUCH_BOOSTER		1
 #define SEC_TSP_FACTORY_TEST	1
@@ -2114,6 +2120,12 @@ static void fw_update(void *device_data)
 	dev_info(&client->dev,
 		"fw_ic_ver = 0x%02x, fw_bin_ver = 0x%02x\n",
 		info->fw_ic_ver, info->pdata->fw_version);
+
+#if !FW_UPDATABLE
+	dev_err(&client->dev, "fw_update: disabled in this kernel\n");
+	info->cmd_state = FAIL;
+	return;
+#endif
 
 	switch (info->cmd_param[0]) {
 	case BUILT_IN:
