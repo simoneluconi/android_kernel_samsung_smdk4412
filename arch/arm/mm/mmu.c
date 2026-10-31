@@ -821,6 +821,15 @@ static int __init early_vmalloc(char *arg)
 			vmalloc_reserve >> 20);
 	}
 
+	/*
+	 * Keep the largest vmalloc= seen. With CONFIG_CMDLINE_EXTEND the
+	 * bootloader's arguments come last, and the Samsung bootloader always
+	 * passes vmalloc=144m: far too small for Android 14, where binder takes
+	 * about 1MB of vmalloc space per process.
+	 */
+	if ((void *)(VMALLOC_END - vmalloc_reserve) > vmalloc_min)
+		return 0;
+
 	vmalloc_min = (void *)(VMALLOC_END - vmalloc_reserve);
 	return 0;
 }
