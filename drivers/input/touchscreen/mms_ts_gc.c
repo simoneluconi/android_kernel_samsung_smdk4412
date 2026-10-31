@@ -23,7 +23,11 @@
 /* #define ESD_DEBUG */
 
 #include <linux/delay.h>
+/* earlysuspend is gone from this kernel: use the plain PM callbacks below */
+#undef CONFIG_HAS_EARLYSUSPEND
+#ifdef CONFIG_HAS_EARLYSUSPEND
 #include <linux/earlysuspend.h>
+#endif
 #include <linux/firmware.h>
 #include <linux/gpio.h>
 #include <linux/i2c.h>
@@ -301,7 +305,9 @@ struct mms_ts_info {
 	unsigned char	finger_state[MAX_FINGERS];
 
 	struct melfas_tsi_platform_data *pdata;
+#ifdef CONFIG_HAS_EARLYSUSPEND
 	struct early_suspend early_suspend;
+#endif
 	struct mutex lock;
 
 	void (*register_cb)(void *);
@@ -2990,7 +2996,9 @@ static int __devexit mms_ts_remove(struct i2c_client *client)
 	kfree(info->intensity);
 #endif
 
+#ifdef CONFIG_HAS_EARLYSUSPEND
 	unregister_early_suspend(&info->early_suspend);
+#endif
 	if (info->irq >= 0)
 		free_irq(info->irq, info);
 	input_unregister_device(info->input_dev);

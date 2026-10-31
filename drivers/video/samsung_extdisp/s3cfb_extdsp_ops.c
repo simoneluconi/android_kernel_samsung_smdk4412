@@ -21,7 +21,11 @@
 
 #ifdef CONFIG_HAS_WAKELOCK
 #include <linux/wakelock.h>
+/* earlysuspend is gone from this kernel: use the plain PM callbacks below */
+#undef CONFIG_HAS_EARLYSUSPEND
+#ifdef CONFIG_HAS_EARLYSUSPEND
 #include <linux/earlysuspend.h>
+#endif
 #include <linux/suspend.h>
 #endif
 

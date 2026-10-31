@@ -971,8 +971,8 @@ static u8 ak8963_get_position(void)
 static struct akm8963_platform_data akm8963_pdata = {
 	.gpio_data_ready_int = GPIO_MSENSOR_INT,
 	.gpio_RST = GPIO_MSENSE_RST_N,
-	.mag_get_position = ak8963_get_position,
-	.select_func = select_func_s16,
+	.layout = 1,
+	.outbit = 1,
 };
 
 static struct i2c_board_info i2c_devs10_emul[] __initdata = {

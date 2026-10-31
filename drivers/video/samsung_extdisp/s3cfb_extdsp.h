@@ -18,7 +18,11 @@
 #include <linux/fb.h>
 #ifdef CONFIG_HAS_WAKELOCK
 #include <linux/wakelock.h>
+/* earlysuspend is gone from this kernel: use the plain PM callbacks below */
+#undef CONFIG_HAS_EARLYSUSPEND
+#ifdef CONFIG_HAS_EARLYSUSPEND
 #include <linux/earlysuspend.h>
+#endif
 #endif
 #include <plat/fb-s5p.h>
 #endif
@@ -99,7 +103,9 @@ struct s3cfb_extdsp_global {
 	struct s3cfb_extdsp_lcd	*lcd;
 	int 			system_state;
 #ifdef CONFIG_HAS_WAKELOCK
+#ifdef CONFIG_HAS_EARLYSUSPEND
 	struct early_suspend	early_suspend;
+#endif
 	struct wake_lock	idle_lock;
 #endif
 	struct s3cfb_extdsp_buf_list	buf_list[CONFIG_FB_S5P_EXTDSP_NR_BUFFERS];

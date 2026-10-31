@@ -37,7 +37,11 @@
 
 #ifdef CONFIG_HAS_WAKELOCK
 #include <linux/wakelock.h>
+/* earlysuspend is gone from this kernel: use the plain PM callbacks below */
+#undef CONFIG_HAS_EARLYSUSPEND
+#ifdef CONFIG_HAS_EARLYSUSPEND
 #include <linux/earlysuspend.h>
+#endif
 #include <linux/suspend.h>
 #endif
 
@@ -235,36 +239,34 @@ void s3cfb_extdsp_late_resume(struct early_suspend *h)
 
 int s3cfb_extdsp_suspend(struct platform_device *pdev, pm_message_t state)
 {
-	struct s3cfb_extdsp_global *fbdev[2];
+	struct s3cfb_extdsp_global *fbdev = fbextdsp->fbdev[0];
 
-	fbdev[0] = fbextdsp->fbdev[0];
+	fbdev->system_state = POWER_OFF;
 
 	return 0;
 }
 
 int s3cfb_extdsp_resume(struct platform_device *pdev)
 {
+	struct s3cfb_extdsp_global *fbdev = fbextdsp->fbdev[0];
 	struct fb_info *fb;
 	struct s3cfb_extdsp_window *win;
-	struct s3cfb_extdsp_global *fbdev[2];
 	int j;
 
-	fbdev[0] = fbextdsp->fbdev[0];
-	dev_dbg(fbdev[0]->dev, "wake up from suspend extdsp[%d]\n", 0);
+	dev_dbg(fbdev->dev, "wake up from suspend\n");
 
-	if (atomic_read(&fbdev[0]->enabled_win) > 0) {
-		s3cfb_extdsp_init_global(fbdev[0]);
+	s3cfb_extdsp_init_global(fbdev);
 
-		for (j = 0; j < 1; j++) {
-			fb = fbdev[0]->fb[j];
-			win = fb->par;
-			if (win->owner == DMA_MEM_FIMD) {
-				if (win->enabled) {
-					s3cfb_extdsp_enable_window(fbdev[0], 0);
-				}
-			}
+	for (j = 0; j < 1; j++) {
+		fb = fbdev->fb[j];
+		win = fb->par;
+		if (win->enabled) {
+			s3cfb_extdsp_set_par(fb);
+			s3cfb_extdsp_enable_window(fbdev, 0);
 		}
 	}
+
+	fbdev->system_state = POWER_ON;
 
 	return 0;
 }

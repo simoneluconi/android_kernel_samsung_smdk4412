@@ -78,6 +78,13 @@
 #elif defined(CONFIG_FB_S5P_HX8369B)
 #include "mdnie_table_p4note.h"
 #endif
+
+#if defined(CONFIG_MACH_GC1)
+/* mdnie_table_gc1.h has no outdoor dimension */
+#define TUNING_TABLE(cabc, mode, outdoor, scenario) tuning_table[cabc][mode][scenario]
+#else
+#define TUNING_TABLE(cabc, mode, outdoor, scenario) tuning_table[cabc][mode][outdoor][scenario]
+#endif
 #include "mdnie_color_tone_4412.h"
 #endif
 #if defined(CONFIG_FB_S5P_LMS501XX)
@@ -203,7 +210,7 @@ static struct mdnie_tuning_info *mdnie_request_table(struct mdnie_info *mdnie)
 		table = &color_tone_table[mdnie->scenario % COLOR_TONE_1];
 		goto exit;
 	} else if (mdnie->scenario < SCENARIO_MAX) {
-		table = &tuning_table[mdnie->cabc][mdnie->mode][mdnie->outdoor][mdnie->scenario];
+		table = &TUNING_TABLE(mdnie->cabc, mdnie->mode, mdnie->outdoor, mdnie->scenario);
 		goto exit;
 	}
 
@@ -403,7 +410,7 @@ static void update_color_position(struct mdnie_info *mdnie, u16 idx)
 		for (mode = 0; mode < MODE_MAX; mode++) {
 			for (outdoor = 0; outdoor < OUTDOOR_MAX; outdoor++) {
 				for (scenario = 0; scenario < SCENARIO_MAX; scenario++) {
-					wbuf = tuning_table[cabc][mode][outdoor][scenario].sequence;
+					wbuf = TUNING_TABLE(cabc, mode, outdoor, scenario).sequence;
 					if (IS_ERR_OR_NULL(wbuf))
 						continue;
 					i = 0;
