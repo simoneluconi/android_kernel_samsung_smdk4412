@@ -531,6 +531,25 @@ config VIDEO_M9MO
         ---help---
           This driver supports M9MO SoC camera module
 
+config VIDEO_M9MO_FW_UPDATE
+	bool "Allow writing the M9MO ISP firmware"
+	depends on VIDEO_M9MO
+	default n
+	help
+	  Let userspace reflash the firmware inside the M9MO ISP
+	  (V4L2_CID_CAM_UPDATE_FW / FW_MODE_UPDATE). A wrong or interrupted
+	  write can permanently break the camera module. Say N.
+
+config VIDEO_M9MO_FACTORY
+	bool "Allow M9MO factory test and calibration controls"
+	depends on VIDEO_M9MO
+	default n
+	help
+	  Enable the V4L2_CID_CAMERA_FACTORY_* write controls used by
+	  Samsung's factory test app (OIS/gyro/lens calibration, defect
+	  pixel and white balance adjustment). Some of them change the
+	  calibration stored in the ISP. Say N.
+
 config VIDEO_S5K5BAFX
 	tristate "S5K5BAFX supporting camera driver"
 	depends on I2C && VIDEO_V4L2 && VIDEO_FIMC_MIPI
