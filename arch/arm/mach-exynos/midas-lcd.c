@@ -734,6 +734,7 @@ static struct s3cfb_lcd s6d6aa1 = {
 	.bpp = 24,
 
 	.freq = 60,
+	.freq_limit = 51,
 
 	/* minumun value is 0 except for wr_act time. */
 	.cpu_timing = {
@@ -744,10 +745,10 @@ static struct s3cfb_lcd s6d6aa1 = {
 	},
 
 	.timing = {
-		.h_fp = 50,
-		.h_bp = 15,
+		.h_fp = 60,
+		.h_bp = 60,
 		.h_sw = 3,
-		.v_fp = 3,
+		.v_fp = 36,
 		.v_fpe = 1,
 		.v_bp = 2,
 		.v_bpe = 1,
