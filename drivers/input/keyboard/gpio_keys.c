@@ -793,10 +793,16 @@ static irqreturn_t strobe_insert_detect(int irq, void *dev_id)
 
 static void strobe_insert_init(struct gpio_keys_drvdata *ddata)
 {
-	int irq = gpio_to_irq(ddata->gpio_strobe_insert);
+	int irq;
 	int ret;
 
 	INIT_DELAYED_WORK(&ddata->strobe_insert_dwork, strobe_insert_work);
+
+	// Platform data without the switch (e.g. the alt_pdata path)
+	if (!gpio_is_valid(ddata->gpio_strobe_insert) || ddata->gpio_strobe_insert == 0)
+		return;
+
+	irq = gpio_to_irq(ddata->gpio_strobe_insert);
 
 	ret = request_threaded_irq(irq, NULL, strobe_insert_detect,
 		IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING | IRQF_ONESHOT,
@@ -1193,6 +1199,13 @@ static int gpio_keys_resume(struct device *dev)
 		gpio_keys_report_event(&ddata->data[i]);
 	}
 	input_sync(ddata->input);
+
+#ifdef CONFIG_MACH_GC1
+	// The switch is not a wake source: re-read it in case the flash moved
+	// during suspend
+	if (ddata->strobe_insert_irq)
+		schedule_delayed_work(&ddata->strobe_insert_dwork, HZ / 20);
+#endif
 
 	return 0;
 }
