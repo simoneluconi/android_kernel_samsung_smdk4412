@@ -1897,12 +1897,23 @@ static int m9mo_set_antibanding(struct v4l2_subdev *sd,
 	return 0;
 }
 
+/*
+ * Retract the lens. This is the polling version from Samsung's final GC100
+ * source (adamoutler/EK-GC100_Galaxy_Camera). The older interrupt version
+ * this driver had waited for M9MO_INT_LENS_INIT, which m9mo_init_param()
+ * masks in INT_EN, so every close sat out the 5 s ISP timeout before the
+ * power went off.
+ *
+ * LENS register 0x28 reads 4 while the lens retracts and 0 once it is in:
+ * resend the command until the retraction starts (3 tries, 200 ms apart),
+ * then poll every 20 ms, for up to 10 s, until it is done.
+ */
 static int m9mo_set_lens_off(struct v4l2_subdev *sd)
 {
 	struct m9mo_state *state = to_state(sd);
-	u32 int_factor = 0;
 	int err = 0;
-	int int_en;
+	int value;
+	int cnt = 3, cnt2 = 500;
 
 	cam_trace("E\n");
 
@@ -1911,29 +1922,48 @@ static int m9mo_set_lens_off(struct v4l2_subdev *sd)
 		return -ENOSYS;
 	}
 
-	err = m9mo_readw(sd, M9MO_CATEGORY_SYS,
-			M9MO_SYS_INT_EN, &int_en);
-	CHECK_ERR(err);
-	int_en &= ~M9MO_INT_MODE;
-	err = m9mo_writew(sd, M9MO_CATEGORY_SYS,
-			M9MO_SYS_INT_EN, int_en);
-	CHECK_ERR(err);
-
-	err = m9mo_set_mode(sd, M9MO_MONITOR_MODE);
-	if (err <= 0) {
-		cam_err("failed to set mode\n");
-		return err;
-	}
-
 	err = m9mo_writeb(sd, M9MO_CATEGORY_LENS,
 		0x01, 0x00);
+	CHECK_ERR(err);
 
-	int_factor = m9mo_wait_interrupt(sd, M9MO_ISP_TIMEOUT);
+	msleep(200);
 
-	if (!(int_factor & M9MO_INT_LENS_INIT)) {
-		cam_err("M9MO_INT_LENS_INIT isn't issued, %#x\n",
-				int_factor);
-		return -ETIMEDOUT;
+	err = m9mo_readb(sd, M9MO_CATEGORY_LENS,
+		0x28, &value);
+	CHECK_ERR(err);
+
+	while (value != 4 && cnt) {
+		err = m9mo_writeb(sd, M9MO_CATEGORY_LENS,
+			0x01, 0x00);
+		CHECK_ERR(err);
+
+		msleep(200);
+
+		err = m9mo_readb(sd, M9MO_CATEGORY_LENS,
+			0x28, &value);
+		CHECK_ERR(err);
+
+		if (value == 4)
+			break;
+
+		cnt--;
+	}
+
+	while (value == 4 && cnt2) {
+		msleep(20);
+		err = m9mo_readb(sd, M9MO_CATEGORY_LENS,
+			0x28, &value);
+		CHECK_ERR(err);
+
+		if (value == 0)
+			break;
+
+		cnt2--;
+	}
+
+	if (value != 0) {
+		cam_err("lens not retracted, LENS 0x28 = %d\n", value);
+		return -1;
 	}
 
 	cam_trace("X\n");
