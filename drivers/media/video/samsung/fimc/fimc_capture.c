@@ -2227,11 +2227,28 @@ int fimc_s_ctrl_capture(void *fh, struct v4l2_control *c)
 	switch (c->id) {
 #ifdef CONFIG_MACH_GC1
 	case V4L2_CID_CAMERA_HOLD_LENS:
-		leave_power = true;
-		ret = v4l2_subdev_call(ctrl->cam->sd, core, s_ctrl, c);
+		/*
+		 * It would keep the M9MO powered with the lens out after close,
+		 * with nothing left to retract it before a reboot. Refused, and
+		 * leave_power stays false so that close always powers down.
+		 */
+		fimc_err("%s: HOLD_LENS refused\n", __func__);
+		ret = -EPERM;
 		break;
 
 	case V4L2_CID_CAM_UPDATE_FW:
+#ifndef CONFIG_VIDEO_M9MO_FW_UPDATE
+		/*
+		 * Refuse before the power cycle below: it would cut the ISP with
+		 * the lens out and leave it unbooted, and m9mo refuses the update
+		 * and the dump anyway.
+		 */
+		if (c->value == FW_MODE_UPDATE || c->value == FW_MODE_DUMP) {
+			fimc_err("%s: ISP firmware update/dump refused\n", __func__);
+			ret = -EPERM;
+			break;
+		}
+#endif
 		if (c->value == FW_MODE_UPDATE || c->value == FW_MODE_DUMP) {
 			if (fimc->mclk_status == CAM_MCLK_ON) {
 				if (ctrl->cam->cam_power)
@@ -2268,6 +2285,15 @@ int fimc_s_ctrl_capture(void *fh, struct v4l2_control *c)
 		break;
 #endif
 	case V4L2_CID_CAMERA_RESET:
+#ifdef CONFIG_MACH_GC1
+		/*
+		 * This power-cycles the sensor without retracting the M9MO's
+		 * lens first. A camera close and reopen resets the ISP safely.
+		 */
+		fimc_err("%s: ESD reset refused on GC1 (the lens would stay out)\n", __func__);
+		ret = -EPERM;
+		break;
+#endif
 		fimc_warn("ESD: reset the camera sensor\n");
 		if (ctrl->cam->initialized) {
 			if (ctrl->cam->cam_power)
