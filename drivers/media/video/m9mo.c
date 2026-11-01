@@ -39,6 +39,11 @@ extern struct class *camera_class;
 struct device *m9mo_dev;
 static bool leave_power;
 
+// Serializes the lens-off of m9mo_remove() and m9mo_shutdown()
+static DEFINE_MUTEX(m9mo_lens_lock);
+// The probed client, until m9mo_remove() has retracted the lens
+static struct i2c_client *m9mo_active_client;
+
 #if 0
 #define M9MO_FW_PATH		"/data/RS_M9MO.bin"
 #define FW_INFO_PATH		"/data/FW_INFO.bin"
@@ -566,7 +571,12 @@ static irqreturn_t m9mo_isp_isr(int irq, void *dev_id)
 
 	cam_dbg("**************** interrupt ****************\n");
 	state->isp.issued = 1;
-	wake_up_interruptible(&state->isp.wait);
+	/*
+	 * wake_up(), not wake_up_interruptible(): m9mo_wait_interrupt() falls
+	 * back to an uninterruptible wait when a signal is pending, and that
+	 * one would otherwise always sleep the full timeout
+	 */
+	wake_up(&state->isp.wait);
 
 	return IRQ_HANDLED;
 }
@@ -605,7 +615,7 @@ static u32 m9mo_wait_interrupt(struct v4l2_subdev *sd,
 	do {
 		m9mo_readw(sd, M9MO_CATEGORY_SYS,
 			M9MO_SYS_INT_FACTOR, &state->isp.int_factor);
-		cam_err(": state->isp.int_factor = %x\n",
+		cam_dbg(": state->isp.int_factor = %x\n",
 					state->isp.int_factor);
 		if (state->isp.int_factor == 0xFFFF) {
 			try_cnt--;
@@ -1911,6 +1921,7 @@ static int m9mo_set_antibanding(struct v4l2_subdev *sd,
 static int m9mo_set_lens_off(struct v4l2_subdev *sd)
 {
 	struct m9mo_state *state = to_state(sd);
+	unsigned long deadline;
 	int err = 0;
 	int value;
 	int cnt = 3, cnt2 = 500;
@@ -1922,26 +1933,34 @@ static int m9mo_set_lens_off(struct v4l2_subdev *sd)
 		return -ENOSYS;
 	}
 
+	/*
+	 * An i2c error must not end this early: the caller powers the ISP
+	 * down right after, with the lens still moving. A failed write counts
+	 * as a try, a failed read as "still retracting", and the whole wait is
+	 * bounded in time (i2c retries make each failed access slower).
+	 */
+	deadline = jiffies + msecs_to_jiffies(10000);
+
 	err = m9mo_writeb(sd, M9MO_CATEGORY_LENS,
 		0x01, 0x00);
-	CHECK_ERR(err);
+	if (err < 0)
+		cam_err("lens off command failed, err %d\n", err);
 
 	msleep(200);
 
-	err = m9mo_readb(sd, M9MO_CATEGORY_LENS,
-		0x28, &value);
-	CHECK_ERR(err);
+	if (m9mo_readb(sd, M9MO_CATEGORY_LENS, 0x28, &value) < 0)
+		value = -1;
 
-	while (value != 4 && cnt) {
+	while (value != 4 && cnt && time_before(jiffies, deadline)) {
 		err = m9mo_writeb(sd, M9MO_CATEGORY_LENS,
 			0x01, 0x00);
-		CHECK_ERR(err);
+		if (err < 0)
+			cam_err("lens off command failed, err %d\n", err);
 
 		msleep(200);
 
-		err = m9mo_readb(sd, M9MO_CATEGORY_LENS,
-			0x28, &value);
-		CHECK_ERR(err);
+		if (m9mo_readb(sd, M9MO_CATEGORY_LENS, 0x28, &value) < 0)
+			value = -1;
 
 		if (value == 4)
 			break;
@@ -1949,11 +1968,10 @@ static int m9mo_set_lens_off(struct v4l2_subdev *sd)
 		cnt--;
 	}
 
-	while (value == 4 && cnt2) {
+	while (value == 4 && cnt2 && time_before(jiffies, deadline)) {
 		msleep(20);
-		err = m9mo_readb(sd, M9MO_CATEGORY_LENS,
-			0x28, &value);
-		CHECK_ERR(err);
+		if (m9mo_readb(sd, M9MO_CATEGORY_LENS, 0x28, &value) < 0)
+			value = 4;
 
 		if (value == 0)
 			break;
@@ -1967,7 +1985,7 @@ static int m9mo_set_lens_off(struct v4l2_subdev *sd)
 	}
 
 	cam_trace("X\n");
-	return err;
+	return 0;
 }
 
 static int m9mo_dump_fw(struct v4l2_subdev *sd)
@@ -8853,6 +8871,20 @@ static int m9mo_s_ext_ctrl(struct v4l2_subdev *sd,
 		cam_err("factory control %#x refused (CONFIG_VIDEO_M9MO_FACTORY)\n", ctrl->id);
 		return -EPERM;
 	}
+
+	/*
+	 * The ISP debug controls write any ISP register or memory address
+	 * (enough to replay the flash erase/write sequence of
+	 * m9mo_program_fw()), and LOGV writes a file at a user-given path
+	 * from the kernel. Refused like the factory controls.
+	 */
+	switch (ctrl->id) {
+	case V4L2_CID_ISP_DEBUG_WRITE:
+	case V4L2_CID_ISP_DEBUG_WRITE_MEM:
+	case V4L2_CID_ISP_DEBUG_LOGV:
+		cam_err("ISP debug control %#x refused (CONFIG_VIDEO_M9MO_FACTORY)\n", ctrl->id);
+		return -EPERM;
+	}
 #endif
 
 	size = ctrl->size;
@@ -9476,14 +9508,27 @@ static int m9mo_s_ctrl(struct v4l2_subdev *sd, struct v4l2_control *ctrl)
 
 	switch (ctrl->id) {
 	case V4L2_CID_CAMERA_HOLD_LENS:
-		leave_power = true;
+		/*
+		 * Keeps the ISP powered with the lens out across a close, after
+		 * which nothing retracts it before a reboot (the i2c client and
+		 * its shutdown hook are gone). Not used on gd1.
+		 */
+		cam_err("HOLD_LENS refused: the lens must retract on close\n");
+		err = -EPERM;
 		break;
 
 	case V4L2_CID_CAM_UPDATE_FW:
-		if (ctrl->value == FW_MODE_DUMP)
+		if (ctrl->value == FW_MODE_DUMP) {
+#ifdef CONFIG_VIDEO_M9MO_FW_UPDATE
 			err = m9mo_dump_fw(sd);
-		else
+#else
+			// It writes FLASH category registers of the ISP
+			cam_err("ISP firmware dump refused (CONFIG_VIDEO_M9MO_FW_UPDATE)\n");
+			err = -EPERM;
+#endif
+		} else {
 			err = m9mo_check_fw(sd);
+		}
 		break;
 
 	case V4L2_CID_CAMERA_SENSOR_MODE:
@@ -11462,10 +11507,15 @@ static int __devinit m9mo_probe(struct i2c_client *client,
 		m9mo_isp_isr, IRQF_TRIGGER_RISING, "m9mo isp", sd);
 	if (err) {
 		cam_err("failed to request irq ~~~~~~~~~~~~~\n");
+		kfree(state);
 		return err;
 	}
 	state->isp.irq = pdata->irq;
 	state->isp.issued = 0;
+
+	mutex_lock(&m9mo_lens_lock);
+	m9mo_active_client = client;
+	mutex_unlock(&m9mo_lens_lock);
 
 	cam_dbg("%s\n", __func__);
 
@@ -11479,18 +11529,31 @@ static int __devexit m9mo_remove(struct i2c_client *client)
 	int err = 0;
 	/*int err;*/
 
+	/*
+	 * Under m9mo_lens_lock: a reboot can reach m9mo_shutdown() while this
+	 * runs (device_shutdown() takes no device lock), and the two lens-off
+	 * sequences must not interleave, nor shutdown use the freed state.
+	 */
+	mutex_lock(&m9mo_lens_lock);
+
 	if (!leave_power) {
 		if (m9mo_set_lens_off(sd) < 0)
 			cam_err("failed to set m9mo_set_lens_off~~~~~\n");
 	}
 
+	// Errors are logged only: the irq and the state must go in any case
 	if (leave_power) {
 		err = m9mo_set_lens_off_timer(sd, 0);
-		CHECK_ERR(err);
+		if (err < 0)
+			cam_err("failed to clear the lens off timer, err %d\n", err);
 
 		err = m9mo_set_mode(sd, M9MO_PARMSET_MODE);
-		CHECK_ERR(err);
+		if (err < 0)
+			cam_err("failed to set the parameter mode, err %d\n", err);
 	}
+
+	m9mo_active_client = NULL;
+	mutex_unlock(&m9mo_lens_lock);
 
 	if (state->isp.irq > 0)
 		free_irq(state->isp.irq, sd);
@@ -11513,20 +11576,33 @@ static int __devexit m9mo_remove(struct i2c_client *client)
  * power off while the camera is open skips that path: the regulators are
  * cut with the lens extended, and it stays out, exposed to knocks and dust.
  * The client only exists while the camera is open, so this runs exactly in
- * that case. It retracts even with leave_power (HOLD_LENS) set, since the
- * power is going away. The regulators shut down later, because they were
- * registered long before this client.
+ * that case (HOLD_LENS, which kept the power on after close, is refused).
+ * The regulators shut down later, because they were registered long before
+ * this client.
+ *
+ * m9mo_remove() may be running at the same time (the camera HAL killed at
+ * reboot): m9mo_lens_lock serializes the two, and once remove has retracted
+ * the lens and cleared m9mo_active_client there is nothing left to do.
  */
 static void m9mo_shutdown(struct i2c_client *client)
 {
-	struct v4l2_subdev *sd = i2c_get_clientdata(client);
+	struct v4l2_subdev *sd;
 
+	mutex_lock(&m9mo_lens_lock);
+
+	if (m9mo_active_client != client)
+		goto out;
+
+	sd = i2c_get_clientdata(client);
 	if (sd == NULL)
-		return;
+		goto out;
 
 	cam_info("retracting the lens before shutdown\n");
 	if (m9mo_set_lens_off(sd) < 0)
 		cam_err("failed to retract the lens before shutdown\n");
+
+out:
+	mutex_unlock(&m9mo_lens_lock);
 }
 
 static const struct i2c_device_id m9mo_id[] = {
