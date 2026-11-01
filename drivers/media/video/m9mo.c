@@ -576,11 +576,26 @@ static u32 m9mo_wait_interrupt(struct v4l2_subdev *sd,
 {
 	struct m9mo_state *state = to_state(sd);
 	int try_cnt = 30;
+	long rc;
 	cam_trace("E\n");
 
-	if (wait_event_interruptible_timeout(state->isp.wait,
+	rc = wait_event_interruptible_timeout(state->isp.wait,
 		state->isp.issued == 1,
-		msecs_to_jiffies(timeout)) == 0) {
+		msecs_to_jiffies(timeout));
+	if (rc < 0) {
+		/*
+		 * Interrupted by a signal: the camera HAL is being killed (init
+		 * sends SIGKILL to it at reboot). Its release still runs
+		 * m9mo_remove(), and the ISP must finish, above all the lens
+		 * retraction, before the power goes. Without this the wait
+		 * returned at once and the lens stayed out.
+		 */
+		cam_warn("interrupted by a signal, waiting without\n");
+		rc = wait_event_timeout(state->isp.wait,
+			state->isp.issued == 1,
+			msecs_to_jiffies(timeout));
+	}
+	if (rc == 0) {
 		cam_err("timeout ~~~~~~~~~~~~~~~~~~~~~\n");
 		return 0;
 	}
