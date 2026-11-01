@@ -11460,6 +11460,30 @@ static int __devexit m9mo_remove(struct i2c_client *client)
 	return 0;
 }
 
+/*
+ * Retract the lens before a reboot or power off.
+ *
+ * FIMC registers this i2c client when the camera opens and unregisters it
+ * on close, which runs m9mo_remove() and retracts the lens. A reboot or
+ * power off while the camera is open skips that path: the regulators are
+ * cut with the lens extended, and it stays out, exposed to knocks and dust.
+ * The client only exists while the camera is open, so this runs exactly in
+ * that case. It retracts even with leave_power (HOLD_LENS) set, since the
+ * power is going away. The regulators shut down later, because they were
+ * registered long before this client.
+ */
+static void m9mo_shutdown(struct i2c_client *client)
+{
+	struct v4l2_subdev *sd = i2c_get_clientdata(client);
+
+	if (sd == NULL)
+		return;
+
+	cam_info("retracting the lens before shutdown\n");
+	if (m9mo_set_lens_off(sd) < 0)
+		cam_err("failed to retract the lens before shutdown\n");
+}
+
 static const struct i2c_device_id m9mo_id[] = {
 	{ M9MO_DRIVER_NAME, 0 },
 	{ }
@@ -11472,6 +11496,7 @@ static struct i2c_driver m9mo_i2c_driver = {
 	},
 	.probe		= m9mo_probe,
 	.remove		= __devexit_p(m9mo_remove),
+	.shutdown	= m9mo_shutdown,
 	.id_table	= m9mo_id,
 };
 
