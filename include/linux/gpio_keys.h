@@ -30,6 +30,9 @@ struct gpio_keys_platform_data {
 #ifdef CONFIG_SENSORS_HALL
 	int gpio_flip_cover;
 #endif
+#ifdef CONFIG_MACH_GC1
+	int gpio_strobe_insert;		/* pop-up flash open/close switch */
+#endif
 };
 
 #endif

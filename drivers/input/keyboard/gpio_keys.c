@@ -55,6 +55,13 @@ struct gpio_keys_drvdata {
 	bool flip_cover;
 	struct delayed_work flip_cover_dwork;
 #endif
+#ifdef CONFIG_MACH_GC1
+	/* Pop-up flash (strobe) open/close switch */
+	int gpio_strobe_insert;
+	int strobe_insert_irq;		/* 0 if not requested */
+	bool strobe_insert;
+	struct delayed_work strobe_insert_dwork;
+#endif
 	struct gpio_button_data data[0];
 	/* WARNING: this area can be expanded. Do NOT add any member! */
 };
@@ -407,10 +414,24 @@ static ssize_t hall_detect_show(struct device *dev,
 }
 #endif
 
+#ifdef CONFIG_MACH_GC1
+/* 1 when the pop-up flash is up, as reported by SW_STROBE_INSERT */
+static ssize_t strobe_insert_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct gpio_keys_drvdata *ddata = dev_get_drvdata(dev);
+
+	return sprintf(buf, "%d\n", gpio_get_value(ddata->gpio_strobe_insert));
+}
+#endif
+
 static DEVICE_ATTR(sec_key_pressed, 0664, key_pressed_show, NULL);
 static DEVICE_ATTR(wakeup_keys, 0664, NULL, wakeup_enable);
 #ifdef CONFIG_SENSORS_HALL
 static DEVICE_ATTR(hall_detect, 0664, hall_detect_show, NULL);
+#endif
+#ifdef CONFIG_MACH_GC1
+static DEVICE_ATTR(strobe_insert, 0444, strobe_insert_show, NULL);
 #endif
 
 static struct attribute *sec_key_attrs[] = {
@@ -418,6 +439,9 @@ static struct attribute *sec_key_attrs[] = {
 	&dev_attr_wakeup_keys.attr,
 #ifdef CONFIG_SENSORS_HALL
 	&dev_attr_hall_detect.attr,
+#endif
+#ifdef CONFIG_MACH_GC1
+	&dev_attr_strobe_insert.attr,
 #endif
 	NULL,
 };
@@ -735,6 +759,68 @@ static irqreturn_t flip_cover_detect(int irq, void *dev_id)
 }
 #endif
 
+#ifdef CONFIG_MACH_GC1
+/*
+ * Pop-up flash switch, from Samsung's GC100 kernel. The GPIO is debounced
+ * by a 50 ms delayed work and reported as SW_STROBE_INSERT (set = flash
+ * up). Unlike Samsung's version, which requested the IRQ in every
+ * gpio_keys_open() and never freed it, the IRQ is set up once in probe.
+ */
+static void strobe_insert_work(struct work_struct *work)
+{
+	struct gpio_keys_drvdata *ddata =
+		container_of(work, struct gpio_keys_drvdata,
+				strobe_insert_dwork.work);
+
+	ddata->strobe_insert = gpio_get_value(ddata->gpio_strobe_insert);
+
+	printk(KERN_DEBUG "[keys] %s : %d\n",
+		__func__, ddata->strobe_insert);
+
+	input_report_switch(ddata->input,
+		SW_STROBE_INSERT, ddata->strobe_insert);
+	input_sync(ddata->input);
+}
+
+static irqreturn_t strobe_insert_detect(int irq, void *dev_id)
+{
+	struct gpio_keys_drvdata *ddata = dev_id;
+
+	cancel_delayed_work_sync(&ddata->strobe_insert_dwork);
+	schedule_delayed_work(&ddata->strobe_insert_dwork, HZ / 20);
+	return IRQ_HANDLED;
+}
+
+static void strobe_insert_init(struct gpio_keys_drvdata *ddata)
+{
+	int irq = gpio_to_irq(ddata->gpio_strobe_insert);
+	int ret;
+
+	INIT_DELAYED_WORK(&ddata->strobe_insert_dwork, strobe_insert_work);
+
+	ret = request_threaded_irq(irq, NULL, strobe_insert_detect,
+		IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING | IRQF_ONESHOT,
+		"strobe_insert", ddata);
+	if (ret < 0) {
+		printk(KERN_ERR
+		"keys: failed to request strobe insert irq %d gpio %d\n",
+		irq, ddata->gpio_strobe_insert);
+		return;
+	}
+	ddata->strobe_insert_irq = irq;
+
+	/* update the current status */
+	schedule_delayed_work(&ddata->strobe_insert_dwork, HZ / 2);
+}
+
+static void strobe_insert_exit(struct gpio_keys_drvdata *ddata)
+{
+	if (ddata->strobe_insert_irq)
+		free_irq(ddata->strobe_insert_irq, ddata);
+	cancel_delayed_work_sync(&ddata->strobe_insert_dwork);
+}
+#endif
+
 static int gpio_keys_open(struct input_dev *input)
 {
 	struct gpio_keys_drvdata *ddata = input_get_drvdata(input);
@@ -918,6 +1004,9 @@ static int __devinit gpio_keys_probe(struct platform_device *pdev)
 #ifdef CONFIG_SENSORS_HALL
 	ddata->gpio_flip_cover = pdata->gpio_flip_cover;
 #endif
+#ifdef CONFIG_MACH_GC1
+	ddata->gpio_strobe_insert = pdata->gpio_strobe_insert;
+#endif
 	mutex_init(&ddata->disable_lock);
 
 	platform_set_drvdata(pdev, ddata);
@@ -930,6 +1019,9 @@ static int __devinit gpio_keys_probe(struct platform_device *pdev)
 	input->evbit[0] |= BIT_MASK(EV_SW);
 	input_set_capability(input, EV_SW, SW_FLIP);
 #endif*/
+#ifdef CONFIG_MACH_GC1
+	input_set_capability(input, EV_SW, SW_STROBE_INSERT);
+#endif
 	input->open = gpio_keys_open;
 	input->close = gpio_keys_close;
 
@@ -991,6 +1083,10 @@ static int __devinit gpio_keys_probe(struct platform_device *pdev)
 		gpio_keys_report_event(&ddata->data[i]);
 	input_sync(input);
 
+#ifdef CONFIG_MACH_GC1
+	strobe_insert_init(ddata);
+#endif
+
 #ifdef CONFIG_FAST_BOOT
 	/*Fake power off*/
 	input_set_capability(input, EV_KEY, KEY_FAKE_PWR);
@@ -1033,6 +1129,10 @@ static int __devexit gpio_keys_remove(struct platform_device *pdev)
 	sysfs_remove_group(&pdev->dev.kobj, &gpio_keys_attr_group);
 
 	device_init_wakeup(&pdev->dev, 0);
+
+#ifdef CONFIG_MACH_GC1
+	strobe_insert_exit(ddata);
+#endif
 
 	for (i = 0; i < ddata->n_buttons; i++) {
 		int irq = gpio_to_irq(ddata->data[i].button->gpio);

@@ -1859,6 +1859,9 @@ struct gpio_keys_button t0_buttons[] = {
 struct gpio_keys_platform_data midas_gpiokeys_platform_data = {
 	midas_buttons,
 	ARRAY_SIZE(midas_buttons),
+#ifdef CONFIG_MACH_GC1
+	.gpio_strobe_insert = STR_PU_DET_18V,
+#endif
 };
 
 static struct platform_device midas_keypad = {
@@ -3278,6 +3281,11 @@ static void __init midas_machine_init(void)
 		midas_buttons[6].code = KEY_PLAY;
 		midas_buttons[6].gpio = GPIO_PLAY_KEY;
 	}
+	/*strobe open/close*/
+	gpio_request(STR_PU_DET_18V, "STR_PU_DET_18V");
+	s3c_gpio_cfgpin(STR_PU_DET_18V, S3C_GPIO_SFN(0xf));
+	s5p_register_gpio_interrupt(STR_PU_DET_18V);
+	gpio_direction_input(STR_PU_DET_18V);
 #endif
 	platform_device_register(&midas_keypad);
 
