@@ -199,6 +199,16 @@ int mmc_init_queue(struct mmc_queue *mq, struct mmc_card *card,
 
 	blk_queue_prep_rq(mq->queue, mmc_prep_request);
 	queue_flag_set_unlocked(QUEUE_FLAG_NONROT, mq->queue);
+
+	/*
+	 * SD cards: with the default 128 KB read-ahead the GC1 reads files at
+	 * 15 MB/s in high speed; 512 KB reaches the bus limit (19 MB/s). Set
+	 * here so that a card inserted after boot gets it too.
+	 */
+	if (mmc_card_sd(card))
+		mq->queue->backing_dev_info.ra_pages =
+			(512 * 1024) / PAGE_CACHE_SIZE;
+
 	if (mmc_can_erase(card))
 		mmc_queue_setup_discard(mq->queue, card);
 
