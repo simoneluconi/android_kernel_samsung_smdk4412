@@ -962,6 +962,7 @@ static void shrink_dcache_for_umount_subtree(struct dentry *dentry)
 		 * until we find one with children or run out altogether */
 		do {
 			struct inode *inode;
+			bool leak;
 
 			/*
 			 * remove the dentry from the lru, and inform
@@ -971,11 +972,21 @@ static void shrink_dcache_for_umount_subtree(struct dentry *dentry)
 			dentry_lru_prune(dentry);
 			__d_shrink(dentry);
 
-			if (dentry->d_count != 0) {
+			/*
+			 * A dentry still in use here is a leaked reference (seen
+			 * on the GC1: a negative exFAT dentry left by a file the
+			 * camera app saved through MediaStore). This was a BUG(),
+			 * which with oops=panic from the bootloader panicked
+			 * every reboot after such a save. Mainline warns and goes
+			 * on (umount_check()): do the same, and leave the dentry
+			 * allocated rather than free memory that is referenced.
+			 */
+			leak = dentry->d_count != 0;
+			if (leak) {
 				printk(KERN_ERR
 				       "BUG: Dentry %p{i=%lx,n=%s}"
 				       " still in use (%d)"
-				       " [unmount of %s %s]\n",
+				       " [unmount of %s %s], leaking it\n",
 				       dentry,
 				       dentry->d_inode ?
 				       dentry->d_inode->i_ino : 0UL,
@@ -983,7 +994,7 @@ static void shrink_dcache_for_umount_subtree(struct dentry *dentry)
 				       dentry->d_count,
 				       dentry->d_sb->s_type->name,
 				       dentry->d_sb->s_id);
-				BUG();
+				WARN_ON(1);
 			}
 
 			if (IS_ROOT(dentry)) {
@@ -995,17 +1006,19 @@ static void shrink_dcache_for_umount_subtree(struct dentry *dentry)
 				list_del(&dentry->d_child);
 			}
 
-			inode = dentry->d_inode;
-			if (inode) {
-				dentry->d_inode = NULL;
-				list_del_init(&dentry->d_u.d_alias);
-				if (dentry->d_op && dentry->d_op->d_iput)
-					dentry->d_op->d_iput(dentry, inode);
-				else
-					iput(inode);
-			}
+			if (!leak) {
+				inode = dentry->d_inode;
+				if (inode) {
+					dentry->d_inode = NULL;
+					list_del_init(&dentry->d_u.d_alias);
+					if (dentry->d_op && dentry->d_op->d_iput)
+						dentry->d_op->d_iput(dentry, inode);
+					else
+						iput(inode);
+				}
 
-			d_free(dentry);
+				d_free(dentry);
+			}
 
 			/* finished when we fall off the top of the tree,
 			 * otherwise we ascend to the parent and move to the
