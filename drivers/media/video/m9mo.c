@@ -4549,7 +4549,14 @@ static int m9mo_start_capture(struct v4l2_subdev *sd, int frame_num)
 			return -ETIMEDOUT;
 		}
 	} else if (state->running_capture_mode == RUNNING_MODE_AE_BRACKET
-		|| state->running_capture_mode == RUNNING_MODE_LOWLIGHT) {
+		|| state->running_capture_mode == RUNNING_MODE_LOWLIGHT
+		|| state->running_capture_mode == RUNNING_MODE_HDR) {
+		/*
+		 * HDR is the AE bracket at 7.5 fps instead of 3: the ISP keeps the
+		 * three exposures, and each one is selected like a bracket frame.
+		 * Samsung's driver fell through to frame 1 only for HDR, because
+		 * its userspace read the HDR frames as YUV.
+		 */
 
 		/* Select image number of frame */
 		err = m9mo_writeb(sd, M9MO_CATEGORY_CAPCTRL,
