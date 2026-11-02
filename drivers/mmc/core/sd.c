@@ -306,6 +306,15 @@ static int mmc_read_switch(struct mmc_card *card)
 		goto out;
 	}
 
+	/*
+	 * High speed applies to SD 3.0 cards too: without it an SD 3.0 card
+	 * on a host without UHS-I (no 1.8 V signalling, like the GC1 microSD
+	 * slot) stays at the 25 MHz default speed. Mainline fixed this in
+	 * "mmc: sd: Handle SD3.0 cards not supporting UHS-I bus speed mode".
+	 */
+	if (status[13] & 0x02)
+		card->sw_caps.hs_max_dtr = 50000000;
+
 	if (card->scr.sda_spec3) {
 		card->sw_caps.sd3_bus_mode = status[13];
 
@@ -348,9 +357,6 @@ static int mmc_read_switch(struct mmc_card *card)
 		}
 
 		card->sw_caps.sd3_curr_limit = status[7];
-	} else {
-		if (status[13] & 0x02)
-			card->sw_caps.hs_max_dtr = 50000000;
 	}
 
 out:
