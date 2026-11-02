@@ -666,6 +666,31 @@ static int m9mo_wait_framesync(struct v4l2_subdev *sd)
 	return 0;
 }
 
+/*
+ * Bracket captures (AE bracket, HDR) send several interrupts while they
+ * expose: the shutter sound and a frame sync per frame, then the capture
+ * end. A single m9mo_wait_interrupt() takes the first of them. Wait for an
+ * interrupt with M9MO_INT_CAPTURE, logging and skipping the others, for at
+ * most @count interrupts: @timeout ms for the first, M9MO_ISP_TIMEOUT for
+ * the next ones (once the exposures signal, the rest follows quickly).
+ * Returns the interrupt factor, or 0.
+ */
+static u32 m9mo_wait_capture_interrupt(struct v4l2_subdev *sd,
+	unsigned int timeout, int count, const char *what)
+{
+	u32 int_factor = 0;
+
+	while (count--) {
+		int_factor = m9mo_wait_interrupt(sd, timeout);
+		cam_info("%s: interrupt factor %#x\n", what, int_factor);
+		if (int_factor == 0 || (int_factor & M9MO_INT_CAPTURE))
+			return int_factor;
+		timeout = M9MO_ISP_TIMEOUT;
+	}
+
+	return 0;
+}
+
 static int m9mo_set_mode(struct v4l2_subdev *sd, u32 mode)
 {
 	int i, err;
@@ -870,10 +895,29 @@ static int m9mo_set_mode_part2(struct v4l2_subdev *sd, u32 mode)
 	u32 int_factor;
 	struct m9mo_state *state = to_state(sd);
 
-	if (state->running_capture_mode != RUNNING_MODE_SINGLE)
+	if (state->stream_on_part2 == false)
 		return 0;
 
-	if (state->stream_on_part2 == false)
+	/*
+	 * Bracket captures: wait for the end of the exposures here too, as for
+	 * a single shot, draining their interrupts (m9mo_start_capture() does
+	 * it for the first frame otherwise). FIMC, started before them, gets a
+	 * stray frame meanwhile: the HAL restarts it before each frame.
+	 */
+	if (mode == M9MO_STILLCAP_MODE
+		&& (state->running_capture_mode == RUNNING_MODE_AE_BRACKET
+		|| state->running_capture_mode == RUNNING_MODE_HDR)) {
+		int_factor = m9mo_wait_capture_interrupt(sd,
+				M9MO_ISP_CAPTURE_TIMEOUT, 8, "bracket exposure");
+		state->stream_on_part2 = false;
+		if (!(int_factor & M9MO_INT_CAPTURE)) {
+			cam_warn("no capture end for the bracket, %#x\n", int_factor);
+			return -ETIMEDOUT;
+		}
+		return 0;
+	}
+
+	if (state->running_capture_mode != RUNNING_MODE_SINGLE)
 		return 0;
 
 	cam_trace("E, %d\n", mode);
@@ -4558,13 +4602,28 @@ static int m9mo_start_capture(struct v4l2_subdev *sd, int frame_num)
 		 * its userspace read the HDR frames as YUV.
 		 */
 
+		/*
+		 * Before the first frame: drain the exposures' interrupts up to
+		 * the capture end (long shutters take up to 35 s). Three frame
+		 * syncs and the sound come first.
+		 */
+		if (frame_num == 1 && state->stream_on_part2) {
+			state->stream_on_part2 = false;
+			int_factor = m9mo_wait_capture_interrupt(sd,
+					M9MO_ISP_CAPTURE_TIMEOUT, 8,
+					"bracket exposure");
+			if (!(int_factor & M9MO_INT_CAPTURE))
+				cam_warn("no capture end before the first bracket frame\n");
+		}
+
 		/* Select image number of frame */
 		err = m9mo_writeb(sd, M9MO_CATEGORY_CAPCTRL,
 				M9MO_CAPCTRL_FRM_SEL, frame_num);
 		CHECK_ERR(err);
 
 		/* Clear Interrupt factor */
-		int_factor = m9mo_wait_interrupt(sd, M9MO_ISP_TIMEOUT);
+		int_factor = m9mo_wait_capture_interrupt(sd, M9MO_ISP_TIMEOUT, 4,
+				"bracket frame select");
 		if (!(int_factor & M9MO_INT_CAPTURE)) {
 			cam_warn("M9MO_INT_CAPTURE isn't issued on frame select, %#x\n",
 					int_factor);
@@ -11051,7 +11110,15 @@ static int m9mo_s_stream_capture(struct v4l2_subdev *sd, int enable)
 
 #ifndef FAST_CAPTURE
 	if (enable) {
-		if (state->running_capture_mode == RUNNING_MODE_SINGLE) {
+		/*
+		 * Brackets go through part1/part2 like a single shot, so that
+		 * STREAM_PART2 waits for the end of their exposures
+		 * (m9mo_set_mode() skipped that wait for the AE bracket, and
+		 * mixed up the sound and frame sync interrupts for HDR).
+		 */
+		if (state->running_capture_mode == RUNNING_MODE_SINGLE
+			|| state->running_capture_mode == RUNNING_MODE_AE_BRACKET
+			|| state->running_capture_mode == RUNNING_MODE_HDR) {
 			m9mo_set_mode_part1(sd, M9MO_STILLCAP_MODE);
 		} else {
 			err = m9mo_set_mode(sd, M9MO_STILLCAP_MODE);
