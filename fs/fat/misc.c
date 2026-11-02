@@ -182,6 +182,18 @@ extern struct timezone sys_tz;
 #define YEAR_2100	120
 #define IS_LEAP_YEAR(y)	(!((y) & 3) && (y) != YEAR_2100)
 
+/*
+ * Seconds to add to a FAT (local) timestamp to get UTC: the time_offset= or
+ * tz=UTC mount option if given, the system time zone otherwise. Backported
+ * from mainline, because Android's vold always passes time_offset=.
+ */
+static inline int fat_tz_offset(struct msdos_sb_info *sbi)
+{
+	return (sbi->options.tz_set ?
+		-sbi->options.time_offset :
+		sys_tz.tz_minuteswest) * SECS_PER_MIN;
+}
+
 /* Linear day numbers of the respective 1sts in non-leap years. */
 static time_t days_in_year[] = {
 	/* Jan  Feb  Mar  Apr  May  Jun  Jul  Aug  Sep  Oct  Nov  Dec */
@@ -212,8 +224,7 @@ void fat_time_fat2unix(struct msdos_sb_info *sbi, struct timespec *ts,
 		   + days_in_year[month] + day
 		   + DAYS_DELTA) * SECS_PER_DAY;
 
-	if (!sbi->options.tz_utc)
-		second += sys_tz.tz_minuteswest * SECS_PER_MIN;
+	second += fat_tz_offset(sbi);
 
 	if (time_cs) {
 		ts->tv_sec = second + (time_cs / 100);
@@ -229,8 +240,7 @@ void fat_time_unix2fat(struct msdos_sb_info *sbi, struct timespec *ts,
 		       __le16 *time, __le16 *date, u8 *time_cs)
 {
 	struct tm tm;
-	time_to_tm(ts->tv_sec, sbi->options.tz_utc ? 0 :
-		   -sys_tz.tz_minuteswest * 60, &tm);
+	time_to_tm(ts->tv_sec, -fat_tz_offset(sbi), &tm);
 
 	/*  FAT can only support year between 1980 to 2107 */
 	if (tm.tm_year < 1980 - 1900) {

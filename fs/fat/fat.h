@@ -33,6 +33,7 @@ struct fat_mount_options {
 	unsigned char name_check; /* r = relaxed, n = normal, s = strict */
 	unsigned char errors;	  /* On error: continue, panic, remount-ro */
 	unsigned short allow_utime;/* permission for setting the [am]time */
+	short time_offset;	  /* Offset of timestamps from UTC (in minutes) */
 	unsigned quiet:1,         /* set = fake successful chmods and chowns */
 		 showexec:1,      /* set = only set x bit for com/exe/bat */
 		 sys_immutable:1, /* set = system files are immutable */
@@ -44,7 +45,7 @@ struct fat_mount_options {
 		 flush:1,	  /* write things quickly */
 		 nocase:1,	  /* Does this need case conversion? 0=need case conversion*/
 		 usefree:1,	  /* Use free_clusters for FAT32 */
-		 tz_utc:1,	  /* Filesystem timestamps are in UTC */
+		 tz_set:1,	  /* Filesystem timestamps' offset set */
 		 rodir:1,	  /* allow ATTR_RO for directory */
 		 discard:1;	  /* Issue discard requests on deletions */
 };
