@@ -3904,10 +3904,17 @@ static int m9mo_set_AF_LED(struct v4l2_subdev *sd, int val)
  * lamp by itself for a 2, 5 or 10 s countdown (LENS 0x2D = 1-3), 0 stops it.
  * NEW 0x04 follows the AF assist setting, as in Samsung's driver (its exact
  * meaning is not documented).
+ *
+ * The lamp's 3.3 V regulator (LDO24) is otherwise on only during AF
+ * (m9mo_set_af()), so it is switched on here for the countdown, and off at
+ * the stop unless an AF is running. Samsung's driver did not: its app
+ * presumably ran the AF, which leaves the regulator on, before the countdown.
  */
 static int m9mo_set_timer_LED(struct v4l2_subdev *sd, int val)
 {
 	struct m9mo_state *state = to_state(sd);
+	struct i2c_client *client = v4l2_get_subdevdata(sd);
+	const struct m9mo_platform_data *pdata = client->dev.platform_data;
 	int err;
 	int set_timer_LED_On;
 
@@ -3935,6 +3942,9 @@ static int m9mo_set_timer_LED(struct v4l2_subdev *sd, int val)
 		return 0;
 	}
 
+	if (set_timer_LED_On && pdata->af_led_power)
+		pdata->af_led_power(1);
+
 	err = m9mo_writeb(sd, M9MO_CATEGORY_NEW,
 		0x4, state->set_AF_LED_On ? 0x0 : 0x1);
 	CHECK_ERR(err);
@@ -3942,6 +3952,9 @@ static int m9mo_set_timer_LED(struct v4l2_subdev *sd, int val)
 	err = m9mo_writeb(sd, M9MO_CATEGORY_LENS,
 		M9MO_LENS_TIMER_LED, set_timer_LED_On);
 	CHECK_ERR(err);
+
+	if (!set_timer_LED_On && !state->focus.start && pdata->af_led_power)
+		pdata->af_led_power(0);
 
 	cam_trace("X\n");
 	return 0;
@@ -11752,6 +11765,14 @@ static int __devexit m9mo_remove(struct i2c_client *client)
 
 	m9mo_active_client = NULL;
 	mutex_unlock(&m9mo_lens_lock);
+
+	/* The lamp regulator, in case a self-timer was never stopped */
+	{
+		const struct m9mo_platform_data *pdata = client->dev.platform_data;
+
+		if (pdata && pdata->af_led_power)
+			pdata->af_led_power(0);
+	}
 
 	if (state->isp.irq > 0)
 		free_irq(state->isp.irq, sd);
