@@ -955,6 +955,50 @@ static int m9mo_set_mode_part2(struct v4l2_subdev *sd, u32 mode)
 	return 0;
 }
 
+/*
+ * The OIS mode for the drive mode, from Samsung's GC100 driver (NEW 0x06):
+ * 0x04 for single shots, 0x05 for multi-frame ones (brackets, HDR, bursts).
+ * Samsung's also picks 0x01/0x02 while recording and 0x03 for panorama;
+ * this driver tracks neither yet.
+ */
+static int m9mo_set_OIS_cap_mode(struct v4l2_subdev *sd)
+{
+	int err;
+	int set_ois_cap_mode, read_ois_cap_mode;
+	struct m9mo_state *state = to_state(sd);
+
+	err = m9mo_readb(sd, M9MO_CATEGORY_NEW,
+		M9MO_NEW_OIS_CUR_MODE, &read_ois_cap_mode);
+	CHECK_ERR(err);
+
+	switch (state->running_capture_mode) {
+	case RUNNING_MODE_CONTINUOUS:
+	case RUNNING_MODE_BEST:
+	case RUNNING_MODE_LOWLIGHT:
+	case RUNNING_MODE_AE_BRACKET:
+	case RUNNING_MODE_HDR:
+	case RUNNING_MODE_BLINK:
+	case RUNNING_MODE_BURST:
+		set_ois_cap_mode = 0x05;
+		break;
+	case RUNNING_MODE_SINGLE:
+	case RUNNING_MODE_WB_BRACKET:
+	default:
+		set_ois_cap_mode = 0x04;
+		break;
+	}
+
+	if (set_ois_cap_mode != read_ois_cap_mode) {
+		cam_dbg("OIS capture mode %#x -> %#x\n",
+			read_ois_cap_mode, set_ois_cap_mode);
+		err = m9mo_writeb(sd, M9MO_CATEGORY_NEW,
+			M9MO_NEW_OIS_CUR_MODE, set_ois_cap_mode);
+		CHECK_ERR(err);
+	}
+
+	return 0;
+}
+
 static int m9mo_set_capture_mode(struct v4l2_subdev *sd, int val)
 {
 	int err, capture_val, framecount, raw_enable;
@@ -1101,6 +1145,8 @@ static int m9mo_set_capture_mode(struct v4l2_subdev *sd, int val)
 		}
 		break;
 	}
+
+	m9mo_set_OIS_cap_mode(sd);
 
 	cam_trace("X\n");
 	return state->running_capture_mode;
@@ -5203,6 +5249,8 @@ static int m9mo_set_fps(struct v4l2_subdev *sd, int val)
 
 	state->fps = val;
 
+	m9mo_set_OIS_cap_mode(sd);
+
 	cam_trace("X\n");
 	return 0;
 }
@@ -8256,6 +8304,8 @@ static int m9mo_set_PASM_mode(struct v4l2_subdev *sd, int val)
 	default:
 		break;
 	}
+
+	m9mo_set_OIS_cap_mode(sd);
 
 	cam_trace("X\n");
 

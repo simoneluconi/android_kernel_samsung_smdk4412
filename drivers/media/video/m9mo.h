@@ -436,6 +436,7 @@ struct m9mo_state {
 
 /* M9MO_CATEGORY_NEW: 0x04 */
 #define M9MO_NEW_TIME_INFO		0x02
+#define M9MO_NEW_OIS_CUR_MODE	0x06
 #define M9MO_NEW_OIS_TIMER		0x07
 #define M9MO_NEW_DETECT_SCENE	0x0B
 #define M9MO_NEW_OIS_VERSION	0x1B
