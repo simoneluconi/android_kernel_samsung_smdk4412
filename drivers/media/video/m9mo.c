@@ -3832,6 +3832,7 @@ static int m9mo_set_touch_auto_focus(struct v4l2_subdev *sd, int val)
 
 static int m9mo_set_AF_LED(struct v4l2_subdev *sd, int val)
 {
+	struct m9mo_state *state = to_state(sd);
 	int err;
 	int set_AF_LED_On;
 
@@ -3844,6 +3845,71 @@ static int m9mo_set_AF_LED(struct v4l2_subdev *sd, int val)
 
 	err = m9mo_writeb(sd, M9MO_CATEGORY_LENS,
 		M9MO_LENS_AF_LED, set_AF_LED_On);
+	CHECK_ERR(err);
+
+	state->set_AF_LED_On = val;
+
+	cam_trace("X\n");
+	return 0;
+}
+
+/*
+ * The self-timer lamp, from Samsung's GC100 driver: the ISP blinks the front
+ * lamp by itself for a 2, 5 or 10 s countdown (LENS 0x2D = 1-3), 0 stops it.
+ * NEW 0x04 follows the AF assist setting, as in Samsung's driver (its exact
+ * meaning is not documented).
+ */
+static int m9mo_set_timer_LED(struct v4l2_subdev *sd, int val)
+{
+	struct m9mo_state *state = to_state(sd);
+	int err;
+	int set_timer_LED_On;
+
+	cam_trace("E, value %d\n", val);
+
+	switch (val) {
+	case V4L2_TIMER_LED_OFF:
+		set_timer_LED_On = 0;
+		break;
+
+	case V4L2_TIMER_LED_2_SEC:
+		set_timer_LED_On = 0x1;
+		break;
+
+	case V4L2_TIMER_LED_5_SEC:
+		set_timer_LED_On = 0x2;
+		break;
+
+	case V4L2_TIMER_LED_10_SEC:
+		set_timer_LED_On = 0x3;
+		break;
+
+	default:
+		cam_warn("invalid value, %d", val);
+		return 0;
+	}
+
+	err = m9mo_writeb(sd, M9MO_CATEGORY_NEW,
+		0x4, state->set_AF_LED_On ? 0x0 : 0x1);
+	CHECK_ERR(err);
+
+	err = m9mo_writeb(sd, M9MO_CATEGORY_LENS,
+		M9MO_LENS_TIMER_LED, set_timer_LED_On);
+	CHECK_ERR(err);
+
+	cam_trace("X\n");
+	return 0;
+}
+
+/* Samsung's self-timer flag for the OIS (NEW 0x07), from the GC100 driver */
+static int m9mo_set_timer_Mode(struct v4l2_subdev *sd, int val)
+{
+	int err;
+
+	cam_trace("E for OIS, value %d\n", val);
+
+	err = m9mo_writeb(sd, M9MO_CATEGORY_NEW,
+		M9MO_NEW_OIS_TIMER, val ? 1 : 0);
 	CHECK_ERR(err);
 
 	cam_trace("X\n");
@@ -9706,6 +9772,14 @@ static int m9mo_s_ctrl(struct v4l2_subdev *sd, struct v4l2_control *ctrl)
 
 	case V4L2_CID_CAMERA_AF_LED:
 		err = m9mo_set_AF_LED(sd, ctrl->value);
+		break;
+
+	case V4L2_CID_CAMERA_TIMER_LED:
+		err = m9mo_set_timer_LED(sd, ctrl->value);
+		break;
+
+	case V4L2_CID_CAMERA_TIMER_MODE:
+		err = m9mo_set_timer_Mode(sd, ctrl->value);
 		break;
 
 	case V4L2_CID_CAMERA_ZOOM:

@@ -1809,6 +1809,16 @@ enum v4l2_widget_mode_level {
 #define V4L2_CID_CAMERA_LENS_STATUS            (V4L2_CID_PRIVATE_BASE + 315)
 #define V4L2_CID_CAMERA_HOLD_LENS            (V4L2_CID_PRIVATE_BASE + 316)
 
+/* From Samsung's GC100 source: the ISP's self-timer lamp */
+#define V4L2_CID_CAMERA_TIMER_LED              (V4L2_CID_PRIVATE_BASE + 317)
+enum set_timer_LED {
+	V4L2_TIMER_LED_OFF = 0,
+	V4L2_TIMER_LED_2_SEC = 2,
+	V4L2_TIMER_LED_5_SEC = 5,
+	V4L2_TIMER_LED_10_SEC = 10,
+};
+#define V4L2_CID_CAMERA_TIMER_MODE             (V4L2_CID_PRIVATE_BASE + 318)
+
 /*      Pixel format FOURCC depth  Description  */
 enum v4l2_pix_format_mode {
 	V4L2_PIX_FMT_MODE_PREVIEW,

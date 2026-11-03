@@ -247,6 +247,9 @@ struct m9mo_state {
 
 	unsigned int fps;
 
+	/* The AF assist lamp setting, which the timer LED also needs */
+	int set_AF_LED_On;
+
 	int factory_down_check;
 	int factory_result_check;
 	int factory_end_check;
@@ -433,6 +436,7 @@ struct m9mo_state {
 
 /* M9MO_CATEGORY_NEW: 0x04 */
 #define M9MO_NEW_TIME_INFO		0x02
+#define M9MO_NEW_OIS_TIMER		0x07
 #define M9MO_NEW_DETECT_SCENE	0x0B
 #define M9MO_NEW_OIS_VERSION	0x1B
 
@@ -522,6 +526,7 @@ struct m9mo_state {
 #define M9MO_LENS_ZOOM_LEVEL_INFO	0x10
 #define M9MO_LENS_AF_LED			0x1C
 #define M9MO_LENS_AF_CAL			0x1D
+#define M9MO_LENS_TIMER_LED			0x2D
 #define M9MO_LENS_AF_RESULT			0x20
 #define M9MO_LENS_ZOOM_SET_INFO		0x22
 #define M9MO_LENS_ZOOM_SPEED		0x25
