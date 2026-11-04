@@ -1831,6 +1831,7 @@ static struct m9mo_platform_data m9mo_plat = {
 	.config_isp_irq = m9mo_config_isp_irq,
 	.config_sambaz = m9mo_config_sambaz,
 	.af_led_power = m9mo_af_led_power,
+	.power = m9mo_power,
 	.irq = IRQ_EINT(2),
 };
 

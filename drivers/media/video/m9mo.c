@@ -11774,6 +11774,73 @@ static int __devinit m9mo_probe(struct i2c_client *client,
 	return 0;
 }
 
+/*
+ * Test hook: make the next lens-off count as failed without sending it, to
+ * exercise the fallback below. One-shot, it clears itself.
+ *   echo 1 > /sys/module/m9mo/parameters/test_lens_off_fail
+ */
+static bool test_lens_off_fail;
+module_param(test_lens_off_fail, bool, 0644);
+
+/*
+ * Retract the lens, and if that fails, power-cycle the ISP and try again.
+ *
+ * A hung ISP ignores the lens-off command (2026-11-02: LENS 0x28 read 0xC4
+ * through all the resends), and powering it down then leaves the lens out.
+ * A fresh ISP boot homes the lens (the "Lens boot" of m9mo_init()), after
+ * which lens-off works: that is how the camera recovered by hand that time.
+ *
+ * Called with the ISP powered and the MCLK running (FIMC unregisters this
+ * client before it calls cam_power(0)) and with the ISP irq still
+ * requested, which m9mo_init() waits on. The power(0)/power(1) pair keeps
+ * the regulator counts balanced, so FIMC's own cam_power(0) still turns
+ * everything off afterwards.
+ */
+static int m9mo_lens_off_or_reset(struct v4l2_subdev *sd)
+{
+	struct i2c_client *client = v4l2_get_subdevdata(sd);
+	const struct m9mo_platform_data *pdata = client->dev.platform_data;
+	int err;
+
+	if (test_lens_off_fail) {
+		test_lens_off_fail = false;
+		cam_err("test: skipping the first lens-off\n");
+		err = -1;
+	} else {
+		err = m9mo_set_lens_off(sd);
+	}
+	if (err == 0)
+		return 0;
+
+	if (pdata == NULL || pdata->power == NULL) {
+		cam_err("lens-off failed, no ISP power control to retry with\n");
+		return err;
+	}
+
+	cam_err("lens-off failed: power-cycling the ISP to retry\n");
+	pdata->power(0);
+	msleep(100);
+	err = pdata->power(1);
+	if (err < 0) {
+		cam_err("ISP power-up failed, err %d: the lens may be out\n", err);
+		return err;
+	}
+
+	err = m9mo_init(sd, 0);
+	if (err < 0) {
+		cam_err("ISP boot failed, err %d: the lens may be out\n", err);
+		return err;
+	}
+
+	err = m9mo_set_lens_off(sd);
+	if (err < 0)
+		cam_err("lens still out after the ISP power cycle\n");
+	else
+		cam_info("lens retracted after an ISP power cycle\n");
+
+	return err;
+}
+
 static int __devexit m9mo_remove(struct i2c_client *client)
 {
 	struct v4l2_subdev *sd = i2c_get_clientdata(client);
@@ -11789,7 +11856,7 @@ static int __devexit m9mo_remove(struct i2c_client *client)
 	mutex_lock(&m9mo_lens_lock);
 
 	if (!leave_power) {
-		if (m9mo_set_lens_off(sd) < 0)
+		if (m9mo_lens_off_or_reset(sd) < 0)
 			cam_err("failed to set m9mo_set_lens_off~~~~~\n");
 	}
 
@@ -11858,7 +11925,7 @@ static void m9mo_shutdown(struct i2c_client *client)
 		goto out;
 
 	cam_info("retracting the lens before shutdown\n");
-	if (m9mo_set_lens_off(sd) < 0)
+	if (m9mo_lens_off_or_reset(sd) < 0)
 		cam_err("failed to retract the lens before shutdown\n");
 
 out:
