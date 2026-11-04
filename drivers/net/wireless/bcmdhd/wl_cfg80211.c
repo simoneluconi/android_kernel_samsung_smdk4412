@@ -3579,6 +3579,76 @@ static bool wl_get_chan_isvht80(struct net_device *net, dhd_pub_t *dhd)
 }
 #endif /* CUSTOM_SET_CPUCORE || CONFIG_TCPACK_FASTTX */
 
+/*
+ * GC100 5 GHz debugging (docs/TODO.md, "Wi-Fi works on 2.4 GHz, not on
+ * 5 GHz"): every 5 GHz join ends in "JOIN: authentication failure, no ack".
+ * With gd1_wl_debug set (/sys/module/dhd/parameters/gd1_wl_debug), log what
+ * the firmware says about the join channel and its transmit setup, before
+ * the join and when it fails. A value above 1 is also written to the
+ * firmware's msglevel before the join (0x100 is WL_ASSOC).
+ */
+static int gd1_wl_debug;
+module_param(gd1_wl_debug, int, 0644);
+
+/*
+ * Antenna test for the same problem: the firmware reports txant 0 and antdiv
+ * 0 (antenna 0, no diversity). With gd1_wl_ant 0, 1 or 3 (diversity), set
+ * both before each join; -1 leaves the firmware's choice.
+ */
+static int gd1_wl_ant = -1;
+module_param(gd1_wl_ant, int, 0644);
+
+static void wl_gd1_debug_dump(struct net_device *dev, int ch, const char *when)
+{
+	s32 chspec, info, val;
+	s32 err;
+
+	if (!gd1_wl_debug)
+		return;
+
+	if (ch > 0) {
+		chspec = ch | (ch <= CH_MAX_2G_CHANNEL ? WL_CHANSPEC_BAND_2G : WL_CHANSPEC_BAND_5G) |
+			WL_CHANSPEC_BW_20;
+		chspec = wl_chspec_host_to_driver(chspec);
+		info = chspec;
+		err = wldev_iovar_getint(dev, "per_chan_info", &info);
+		WL_ERR(("gd1 %s: ch %d chanspec 0x%04x per_chan_info err %d flags 0x%x"
+			" (valid_hw %d valid_sw %d 5g %d radar %d inactive %d passive %d restricted %d)\n",
+			when, ch, chspec, err, info,
+			!!(info & WL_CHAN_VALID_HW), !!(info & WL_CHAN_VALID_SW),
+			!!(info & WL_CHAN_BAND_5G), !!(info & WL_CHAN_RADAR),
+			!!(info & WL_CHAN_INACTIVE), !!(info & WL_CHAN_PASSIVE),
+			!!(info & WL_CHAN_RESTRICTED)));
+	}
+
+	val = 0;
+	err = wldev_iovar_getint(dev, "chanspec", &val);
+	WL_ERR(("gd1 %s: current chanspec err %d 0x%04x\n", when, err, val));
+	val = 0;
+	err = wldev_iovar_getint(dev, "qtxpower", &val);
+	WL_ERR(("gd1 %s: qtxpower err %d 0x%x (%d qdBm)\n", when, err, val, val & 0xff));
+	val = 0;
+	err = wldev_iovar_getint(dev, "txchain", &val);
+	WL_ERR(("gd1 %s: txchain err %d 0x%x\n", when, err, val));
+	val = 0;
+	err = wldev_iovar_getint(dev, "rxchain", &val);
+	WL_ERR(("gd1 %s: rxchain err %d 0x%x\n", when, err, val));
+	val = 0;
+	err = wldev_ioctl(dev, WLC_GET_TXANT, &val, sizeof(val), false);
+	WL_ERR(("gd1 %s: txant err %d %d\n", when, err, dtoh32(val)));
+	val = 0;
+	err = wldev_ioctl(dev, WLC_GET_ANTDIV, &val, sizeof(val), false);
+	WL_ERR(("gd1 %s: antdiv err %d %d\n", when, err, dtoh32(val)));
+	val = 0;
+	err = wldev_get_band(dev, (uint *)&val);
+	WL_ERR(("gd1 %s: band err %d %d\n", when, err, val));
+
+	if (gd1_wl_debug > 1 && !strcmp(when, "join")) {
+		err = wldev_iovar_setint(dev, "msglevel", gd1_wl_debug);
+		WL_ERR(("gd1 %s: msglevel 0x%x err %d\n", when, gd1_wl_debug, err));
+	}
+}
+
 static s32
 wl_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
 	struct cfg80211_connect_params *sme)
@@ -3883,6 +3953,20 @@ wl_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
 	if (ext_join_params->ssid.SSID_len < IEEE80211_MAX_SSID_LEN) {
 		WL_INFO(("ssid \"%s\", len (%d)\n", ext_join_params->ssid.SSID,
 			ext_join_params->ssid.SSID_len));
+	}
+	if (gd1_wl_ant >= 0) {
+		s32 ant = htod32(gd1_wl_ant);
+		s32 e1 = wldev_ioctl(dev, WLC_SET_ANTDIV, &ant, sizeof(ant), true);
+		s32 e2;
+
+		ant = htod32(gd1_wl_ant);
+		e2 = wldev_ioctl(dev, WLC_SET_TXANT, &ant, sizeof(ant), true);
+		WL_ERR(("gd1 join: antdiv/txant %d, err %d/%d\n", gd1_wl_ant, e1, e2));
+	}
+	if (gd1_wl_debug) {
+		WL_ERR(("gd1 join: %d chanspecs, first 0x%04x\n", chan_cnt,
+			chan_cnt ? ext_join_params->assoc.chanspec_list[0] : 0));
+		wl_gd1_debug_dump(dev, cfg->channel, "join");
 	}
 	wl_set_drv_status(cfg, CONNECTING, dev);
 
@@ -8508,8 +8592,10 @@ wl_bss_connect_done(struct bcm_cfg80211 *cfg, struct net_device *ndev,
 			GFP_KERNEL);
 		if (completed)
 			WL_INFO(("Report connect result - connection succeeded\n"));
-		else
+		else {
 			WL_ERR(("Report connect result - connection failed\n"));
+			wl_gd1_debug_dump(ndev, cfg->channel, "failed");
+		}
 	}
 #ifdef CONFIG_TCPACK_FASTTX
 	if (wl_get_chan_isvht80(ndev, dhd))
