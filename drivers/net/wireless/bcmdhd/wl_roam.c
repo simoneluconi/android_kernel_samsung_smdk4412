@@ -62,7 +62,16 @@ static int roamscan_mode = ROAMSCAN_MODE_NORMAL;
 
 void init_roam(int ioctl_ver)
 {
-#ifdef D11AC_IOTYPES
+	/*
+	 * The chanspecs built here go to the firmware as they are (the join
+	 * in wl_cfg80211_connect() and wl_ch_to_chanspec() copies them without
+	 * wl_chspec_host_to_driver()), so they must be in the firmware's own
+	 * format. The legacy choice used to be under D11AC_IOTYPES, which this
+	 * build does not define: with an ioctl version 1 firmware, such as the
+	 * GC100's 6.10.58, every join then got 11ac chanspecs (5 GHz channel
+	 * 40 as 0xd028, not a valid legacy 5 GHz chanspec), and no 5 GHz join
+	 * worked ("JOIN: authentication failure, no ack").
+	 */
 	if (ioctl_ver == 1) {
 		/* legacy chanspec */
 		band2G = WL_LCHANSPEC_BAND_2G;
@@ -73,11 +82,8 @@ void init_roam(int ioctl_ver)
 		band5G = WL_CHANSPEC_BAND_5G;
 		band_bw = WL_CHANSPEC_BW_20;
 	}
-#else
-	band2G = WL_CHANSPEC_BAND_2G;
-	band5G = WL_CHANSPEC_BAND_5G;
-	band_bw = WL_CHANSPEC_BW_20 | WL_CHANSPEC_CTL_SB_NONE;
-#endif /* D11AC_IOTYPES */
+	WL_ERR(("%s: ioctl version %d, %s chanspecs\n", __FUNCTION__, ioctl_ver,
+		ioctl_ver == 1 ? "legacy" : "11ac"));
 
 	n_roam_cache = 0;
 	roam_band = WLC_BAND_AUTO;
