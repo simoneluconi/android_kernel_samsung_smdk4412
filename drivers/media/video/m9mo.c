@@ -11800,7 +11800,8 @@ static int m9mo_lens_off_or_reset(struct v4l2_subdev *sd)
 {
 	struct i2c_client *client = v4l2_get_subdevdata(sd);
 	const struct m9mo_platform_data *pdata = client->dev.platform_data;
-	int err;
+	int err, old_mode;
+	u32 int_factor;
 
 	if (test_lens_off_fail) {
 		test_lens_off_fail = false;
@@ -11831,6 +11832,26 @@ static int m9mo_lens_off_or_reset(struct v4l2_subdev *sd)
 		cam_err("ISP boot failed, err %d: the lens may be out\n", err);
 		return err;
 	}
+
+	/*
+	 * Right after the boot the ISP is in parameter mode and does not know
+	 * where the lens is: a lens-off there reported "in" (LENS 0x28 went 4,
+	 * then 0) with the lens left half out (2026-11-04 test). A normal
+	 * open enters monitor mode first, which extends and homes the lens,
+	 * and its lens-off then works. Do the same, and give the lens time to
+	 * settle before retracting it.
+	 */
+	old_mode = m9mo_set_mode(sd, M9MO_MONITOR_MODE);
+	if (old_mode < 0) {
+		cam_err("monitor mode failed, err %d: the lens may be out\n", old_mode);
+		return old_mode;
+	}
+	if (old_mode != M9MO_MONITOR_MODE) {
+		int_factor = m9mo_wait_interrupt(sd, M9MO_ISP_TIMEOUT);
+		if (!(int_factor & M9MO_INT_MODE))
+			cam_err("M9MO_INT_MODE isn't issued, %#x\n", int_factor);
+	}
+	msleep(1000);
 
 	err = m9mo_set_lens_off(sd);
 	if (err < 0)
