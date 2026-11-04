@@ -5367,21 +5367,62 @@ static int m9mo_set_widget_mode_level(struct v4l2_subdev *sd, int val)
 	return 0;
 }
 
+/*
+ * A PARM category register: the ISP only takes those in parameter mode,
+ * so Samsung's driver switches to it around such writes (see the gamma in
+ * m9mo_set_widget_mode_level()). Written in monitor mode they are stored
+ * but not used: LSC and LDC set with the viewfinder open had no effect.
+ * Skipped when the register already holds the value, so a forced re-apply
+ * does not stall the viewfinder.
+ */
+static int m9mo_writeb_parm(struct v4l2_subdev *sd, u8 reg, u32 val)
+{
+	int err, old_mode;
+	u32 cur, int_factor;
+	struct v4l2_control ctrl;
+	struct m9mo_state *state = to_state(sd);
+
+	err = m9mo_readb(sd, M9MO_CATEGORY_PARM, reg, &cur);
+	CHECK_ERR(err);
+	cam_info("PARM %#x: %#x -> %#x\n", reg, cur, val);
+	if (cur == val)
+		return 0;
+
+	old_mode = m9mo_set_mode(sd, M9MO_PARMSET_MODE);
+	CHECK_ERR(old_mode);
+
+	err = m9mo_writeb(sd, M9MO_CATEGORY_PARM, reg, val);
+	if (err < 0)
+		cam_err("PARM %#x write failed, err %d\n", reg, err);
+
+	if (old_mode == M9MO_MONITOR_MODE) {
+		old_mode = m9mo_set_mode(sd, M9MO_MONITOR_MODE);
+		CHECK_ERR(old_mode);
+		int_factor = m9mo_wait_interrupt(sd, M9MO_ISP_TIMEOUT);
+		if (!(int_factor & M9MO_INT_MODE)) {
+			cam_err("M9MO_INT_MODE isn't issued, %#x\n", int_factor);
+			return -ETIMEDOUT;
+		}
+
+		// As in m9mo_s_stream_preview(): monitor entry can reset the zoom
+		if (state->zoom >= 0x0F) {
+			ctrl.id = V4L2_CID_CAMERA_ZOOM;
+			ctrl.value = state->zoom;
+			m9mo_set_zoom(sd, &ctrl);
+		}
+	}
+
+	return err;
+}
+
 static int m9mo_set_LDC(struct v4l2_subdev *sd, int val)
 {
 	int err;
 
 	cam_dbg("%s\n", val ? "on" : "off");
 
-	if (val == 1) {
-		err = m9mo_writeb(sd, M9MO_CATEGORY_PARM,
-			0x1B, 0x01);
-		CHECK_ERR(err);
-	} else {
-		err = m9mo_writeb(sd, M9MO_CATEGORY_PARM,
-			0x1B, 0x00);
-		CHECK_ERR(err);
-	}
+	err = m9mo_writeb_parm(sd, 0x1B, val == 1 ? 0x01 : 0x00);
+	CHECK_ERR(err);
 
 	cam_trace("X\n");
 	return 0;
@@ -5393,15 +5434,8 @@ static int m9mo_set_LSC(struct v4l2_subdev *sd, int val)
 
 	cam_dbg("%s\n", val ? "on" : "off");
 
-	if (val == 1) {
-		err = m9mo_writeb(sd, M9MO_CATEGORY_PARM,
-			0x07, 0x01);
-		CHECK_ERR(err);
-	} else {
-		err = m9mo_writeb(sd, M9MO_CATEGORY_PARM,
-			0x07, 0x00);
-		CHECK_ERR(err);
-	}
+	err = m9mo_writeb_parm(sd, 0x07, val == 1 ? 0x01 : 0x00);
+	CHECK_ERR(err);
 
 	cam_trace("X\n");
 	return 0;
