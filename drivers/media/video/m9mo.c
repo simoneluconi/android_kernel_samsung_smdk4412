@@ -2662,12 +2662,19 @@ static int m9mo_set_sensor_mode(struct v4l2_subdev *sd, int val)
 static int m9mo_set_flash_evc_step(struct v4l2_subdev *sd, int val)
 {
 	int err;
+	u32 readback;
 
 	cam_trace("E, value %d\n", val);
 
 	err = m9mo_writeb(sd, M9MO_CATEGORY_CAPPARM,
 			M9MO_CAPPARM_STROBE_EVC, val);
 	CHECK_ERR(err);
+
+	// Logged while the flash step shows no effect on the shots (TODO.md)
+	err = m9mo_readb(sd, M9MO_CATEGORY_CAPPARM,
+			M9MO_CAPPARM_STROBE_EVC, &readback);
+	CHECK_ERR(err);
+	cam_info("flash EV step %d, readback %u\n", val, readback);
 
 	cam_trace("X\n");
 	return 0;
