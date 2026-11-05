@@ -8240,6 +8240,7 @@ struct cgroup_subsys cpu_cgroup_subsys = {
 	.create		= cpu_cgroup_create,
 	.destroy	= cpu_cgroup_destroy,
 	.can_attach	= cpu_cgroup_can_attach,
+	.allow_attach	= subsys_cgroup_allow_attach,
 	.attach		= cpu_cgroup_attach,
 	.exit		= cpu_cgroup_exit,
 	.populate	= cpu_cgroup_populate,

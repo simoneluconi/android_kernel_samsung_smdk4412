@@ -468,6 +468,10 @@ struct task_struct *cgroup_taskset_next(struct cgroup_taskset *tset);
 struct cgroup *cgroup_taskset_cur_cgroup(struct cgroup_taskset *tset);
 int cgroup_taskset_size(struct cgroup_taskset *tset);
 
+/* allow_attach for the groups Android manages: requires CAP_SYS_NICE */
+int subsys_cgroup_allow_attach(struct cgroup *cgrp,
+			       struct cgroup_taskset *tset);
+
 /**
  * cgroup_taskset_for_each - iterate cgroup_taskset
  * @task: the loop cursor
@@ -492,6 +496,11 @@ struct cgroup_subsys {
 	void (*destroy)(struct cgroup_subsys *ss, struct cgroup *cgrp);
 	int (*can_attach)(struct cgroup_subsys *ss, struct cgroup *cgrp,
 			  struct cgroup_taskset *tset);
+	/*
+	 * Lets a writer that fails the uid check attach the tasks anyway,
+	 * as Android's system_server moves app threads between groups.
+	 */
+	int (*allow_attach)(struct cgroup *cgrp, struct cgroup_taskset *tset);
 	void (*cancel_attach)(struct cgroup_subsys *ss, struct cgroup *cgrp,
 			      struct cgroup_taskset *tset);
 	void (*attach)(struct cgroup_subsys *ss, struct cgroup *cgrp,
