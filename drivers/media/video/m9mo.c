@@ -4047,6 +4047,104 @@ static int m9mo_set_zoom(struct v4l2_subdev *sd, struct v4l2_control *ctrl)
 	return 0;
 }
 
+/*
+ * The ISP silently drops a zoom start sent too soon after a stop, and then
+ * refuses later starts too until the lens is closed (2026-11-08). ZOOM_STATUS
+ * bit 0 is "moving": it clears ~200 ms after a mid-travel stop and within
+ * 5 ms at the tele end, and the ISP takes a start a fixed 35-130 ms after
+ * that. So a start waits for the bit, bounded by zoom_stop_wait_ms from the
+ * stop, then zoom_settle_ms (fails at 30, works from 50 mid-travel).
+ *
+ * A start pushed into an end of travel never moves the lens, and then the
+ * bit stays set until the bound, but the ISP takes a start 40-80 ms after
+ * that stop. So when the level did not change and is the end the start
+ * pushed toward, a start waits zoom_end_settle_ms from the stop instead.
+ * The defaults keep a 20 ms margin over the failures measured on one unit;
+ * all three can be tuned at /sys/module/m9mo/parameters/.
+ */
+static unsigned int zoom_stop_wait_ms = 600;
+module_param(zoom_stop_wait_ms, uint, 0644);
+
+static unsigned int zoom_settle_ms = 70;
+module_param(zoom_settle_ms, uint, 0644);
+
+static unsigned int zoom_end_settle_ms = 100;
+module_param(zoom_end_settle_ms, uint, 0644);
+
+#define M9MO_ZOOM_LEVEL_MAX	0x0F
+
+static unsigned long m9mo_zoom_stop_jiffies = INITIAL_JIFFIES;
+static int m9mo_zoom_start_level = -1;
+static int m9mo_zoom_start_ctrl = 2;
+static bool m9mo_zoom_stopped_at_end;
+
+static int m9mo_read_zoom_level(struct v4l2_subdev *sd)
+{
+	int err, level;
+
+	err = m9mo_readb2(sd, M9MO_CATEGORY_LENS,
+		M9MO_LENS_ZOOM_LEVEL_INFO, &level);
+	return err < 0 ? -1 : level & 0xF;
+}
+
+/* After writing a stop: when it happened, and whether the lens was pushed
+ * into an end of travel without moving */
+static void m9mo_zoom_note_stop(struct v4l2_subdev *sd)
+{
+	int level = m9mo_read_zoom_level(sd);
+
+	m9mo_zoom_stop_jiffies = jiffies;
+	m9mo_zoom_stopped_at_end = level >= 0 &&
+		level == m9mo_zoom_start_level &&
+		((m9mo_zoom_start_ctrl == 0 && level == M9MO_ZOOM_LEVEL_MAX) ||
+		 (m9mo_zoom_start_ctrl == 1 && level == 0));
+	cam_trace("level %d, at the start %d, ctrl %d: %s\n", level,
+		m9mo_zoom_start_level, m9mo_zoom_start_ctrl,
+		m9mo_zoom_stopped_at_end ? "pushed into an end" : "moved");
+	m9mo_zoom_start_ctrl = 2;
+}
+
+static void m9mo_wait_zoom_stopped(struct v4l2_subdev *sd)
+{
+	unsigned long stop = m9mo_zoom_stop_jiffies;
+	unsigned long since = jiffies - stop;
+	unsigned long deadline = stop + msecs_to_jiffies(zoom_stop_wait_ms);
+	/* also bounded by count, in case jiffies wrapped since the stop */
+	unsigned int cnt = zoom_stop_wait_ms / 10 + 1;
+	int err, status = -1;
+
+	/* Long after the stop the ISP is idle */
+	if (since >= msecs_to_jiffies(zoom_stop_wait_ms + zoom_settle_ms))
+		return;
+
+	if (m9mo_zoom_stopped_at_end) {
+		unsigned long settle = msecs_to_jiffies(zoom_end_settle_ms);
+
+		if (since < settle)
+			msleep(jiffies_to_msecs(settle - since));
+		cam_trace("start %u ms after a stop at an end (called at %u ms)\n",
+			jiffies_to_msecs(jiffies - stop),
+			jiffies_to_msecs(since));
+		return;
+	}
+
+	while (time_before(jiffies, deadline) && cnt--) {
+		err = m9mo_readb2(sd, M9MO_CATEGORY_LENS,
+			M9MO_LENS_ZOOM_STATUS, &status);
+		/* m9mo_read returns 1 on success */
+		if (err < 0 || !(status & 0x1))
+			break;
+		msleep(10);
+	}
+
+	/* From when the bit read 0, or the bound ran out */
+	msleep(zoom_settle_ms);
+
+	cam_trace("start %u ms after the stop (called at %u ms), ZOOM_STATUS 0x%02x\n",
+		jiffies_to_msecs(jiffies - stop), jiffies_to_msecs(since),
+		status);
+}
+
 static int m9mo_set_zoom_ctrl(struct v4l2_subdev *sd, int val)
 {
 	struct m9mo_state *state = to_state(sd);
@@ -4099,24 +4197,60 @@ static int m9mo_set_zoom_ctrl(struct v4l2_subdev *sd, int val)
 		M9MO_LENS_AF_ZOOM_CTRL, &read_ctrl);
 	CHECK_ERR(err);
 
-	if (read_speed != zoom_speed && val != V4L2_OPTICAL_ZOOM_STOP) {
+	/* AF_ZOOM_CTRL reads back the last command: 2 after a stop */
+	if (val == V4L2_OPTICAL_ZOOM_STOP) {
+		if (read_ctrl != 2) {
+			err = m9mo_writeb(sd, M9MO_CATEGORY_LENS,
+				M9MO_LENS_AF_ZOOM_CTRL, 2);
+			CHECK_ERR(err);
+			m9mo_zoom_note_stop(sd);
+		}
+		cam_trace("X\n");
+		return 0;
+	}
+
+	if (read_ctrl == zoom_ctrl) {
+		/*
+		 * Speed change while moving (slow and fast lever stages): only
+		 * ZOOM_SPEED is written. The move goes on without a stop; the
+		 * rate changes little (fast is ~4.7 levels/s, slow ~3.6).
+		 */
+		if (read_speed != zoom_speed) {
+			err = m9mo_writeb(sd, M9MO_CATEGORY_LENS,
+				M9MO_LENS_ZOOM_SPEED, zoom_speed);
+			CHECK_ERR(err);
+		}
+		cam_trace("X\n");
+		return 0;
+	}
+
+	/* A reversal stops the motor before the new direction */
+	if (read_ctrl != 2) {
+		err = m9mo_writeb(sd, M9MO_CATEGORY_LENS,
+			M9MO_LENS_AF_ZOOM_CTRL, 2);
+		CHECK_ERR(err);
+		m9mo_zoom_note_stop(sd);
+	}
+
+	m9mo_wait_zoom_stopped(sd);
+
+	if (read_speed != zoom_speed) {
 		err = m9mo_writeb(sd, M9MO_CATEGORY_LENS,
 			M9MO_LENS_ZOOM_SPEED, zoom_speed);
 		CHECK_ERR(err);
 	}
 
-	if (read_ctrl != zoom_ctrl) {
-		if (val != V4L2_OPTICAL_ZOOM_STOP) {
-			/* AF CANCEL */
-			err = m9mo_writeb(sd, M9MO_CATEGORY_LENS,
-				M9MO_LENS_AF_START_STOP, 0x05);
-			CHECK_ERR(err);
-		}
+	/* AF CANCEL */
+	err = m9mo_writeb(sd, M9MO_CATEGORY_LENS,
+		M9MO_LENS_AF_START_STOP, 0x05);
+	CHECK_ERR(err);
 
-		err = m9mo_writeb(sd, M9MO_CATEGORY_LENS,
-			M9MO_LENS_AF_ZOOM_CTRL, zoom_ctrl);
-		CHECK_ERR(err);
-	}
+	m9mo_zoom_start_level = m9mo_read_zoom_level(sd);
+	m9mo_zoom_start_ctrl = zoom_ctrl;
+
+	err = m9mo_writeb(sd, M9MO_CATEGORY_LENS,
+		M9MO_LENS_AF_ZOOM_CTRL, zoom_ctrl);
+	CHECK_ERR(err);
 
 	cam_trace("X\n");
 	return 0;
