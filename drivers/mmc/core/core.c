@@ -2086,6 +2086,19 @@ static int mmc_rescan_try_freq(struct mmc_host *host, unsigned freq)
 	mmc_hw_reset_for_init(host);
 
 	/*
+	 * A host with a soldered eMMC only: a failed init there must not
+	 * turn into a phantom SDIO or SD card (seen on the GC200, where the
+	 * Wi-Fi driver then bound to it and crashed on removal).
+	 */
+	if (host->caps2 & MMC_CAP2_MMC_ONLY) {
+		mmc_go_idle(host);
+		if (!mmc_attach_mmc(host))
+			return 0;
+		mmc_power_off(host);
+		return -EIO;
+	}
+
+	/*
 	 * sdio_reset sends CMD52 to reset card.  Since we do not know
 	 * if the card is being re-initialized, just send it.  CMD52
 	 * should be ignored by SD/eMMC cards.

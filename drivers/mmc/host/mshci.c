@@ -24,6 +24,9 @@
 #include <linux/leds.h>
 
 #include <linux/mmc/host.h>
+#ifdef CONFIG_MACH_SF2
+#include <linux/mmc/card.h>
+#endif
 
 #include <plat/cpu.h>
 
@@ -292,6 +295,61 @@ static void mshci_reset_all(struct mshci_host *host)
 	udelay(1);
 }
 
+#ifdef CONFIG_MACH_SF2
+/*
+ * The eMMC counts as up only once the core has registered it: Samsung's
+ * moviNAND code in core/mmc.c sets host->card early, during card init.
+ */
+static inline bool mshci_sf2_card_up(struct mshci_host *host)
+{
+	return host->mmc->card && mmc_card_present(host->mmc->card);
+}
+
+/*
+ * The GC200's 2014 bootloader can leave the controller mid-transfer after a
+ * warm reboot: IDMAC still enabled, a byte count from loading the boot image
+ * and pending data interrupts. The resets below then do not take, card init
+ * fails ("cmd_strt_bit not released") and there is no eMMC. Stop the internal
+ * DMA and clear its state before the normal resets. A battery pull hides the
+ * problem because the controller then starts from its reset state.
+ */
+static void mshci_quiesce_idmac(struct mshci_host *host)
+{
+	u32 count = 100;
+
+	pr_info("%s: start state CTRL %08x BMOD %08x UHS %08x CLKSEL %08x "
+		"CLKDIV %08x CLKENA %08x CTYPE %08x STATUS %08x BYTCNT %08x "
+		"CMD %08x RINTSTS %08x IDSTS %08x\n", mmc_hostname(host->mmc),
+		mshci_readl(host, MSHCI_CTRL), mshci_readl(host, MSHCI_BMOD),
+		mshci_readl(host, MSHCI_UHS_REG), mshci_readl(host, MSHCI_CLKSEL),
+		mshci_readl(host, MSHCI_CLKDIV), mshci_readl(host, MSHCI_CLKENA),
+		mshci_readl(host, MSHCI_CTYPE), mshci_readl(host, MSHCI_STATUS),
+		mshci_readl(host, MSHCI_BYTCNT), mshci_readl(host, MSHCI_CMD),
+		mshci_readl(host, MSHCI_RINTSTS), mshci_readl(host, MSHCI_IDSTS));
+
+	/*
+	 * A previous kernel may have left the bus in DDR with a DDR clock phase;
+	 * set_ios only rewrites these for 4- and 8-bit buses, so card init at
+	 * 400 kHz would start in DDR. Back to SDR and the SDR phase.
+	 */
+	mshci_writel(host, mshci_readl(host, MSHCI_UHS_REG) & ~(0x1 << 16),
+		MSHCI_UHS_REG);
+	mshci_writel(host, 0x00010001, MSHCI_CLKSEL);
+
+	mshci_writel(host, mshci_readl(host, MSHCI_CTRL) &
+		~(INT_ENABLE | DMA_ENABLE | ENABLE_IDMAC), MSHCI_CTRL);
+	mshci_writel(host, 0, MSHCI_IDINTEN);
+	mshci_writel(host, mshci_readl(host, MSHCI_BMOD) & ~BMOD_IDMAC_ENABLE,
+		MSHCI_BMOD);
+	mshci_writel(host, BMOD_IDMAC_RESET, MSHCI_BMOD);
+	while ((mshci_readl(host, MSHCI_BMOD) & BMOD_IDMAC_RESET) && --count)
+		udelay(10);
+	mshci_writel(host, 0xffffffff, MSHCI_IDSTS);
+	mshci_writel(host, INTMSK_ALL, MSHCI_RINTSTS);
+	mshci_writel(host, 0, MSHCI_INTMSK);
+}
+#endif
+
 static void mshci_init(struct mshci_host *host)
 {
 	mshci_reset_all(host);
@@ -312,6 +370,36 @@ static void mshci_reinit(struct mshci_host *host)
 	mshci_init(host);
 	mshci_enable_card_detection(host);
 }
+
+#ifdef CONFIG_MACH_SF2
+/*
+ * Full controller set-up again, as at the end of mshci_add_host, for the
+ * GC200 eMMC retry in mshci-s3c.c. The caller holds the host claimed.
+ */
+void mshci_sf2_reinit(struct mshci_host *host)
+{
+	int count = 100;
+
+	mshci_quiesce_idmac(host);
+	mshci_reinit(host);
+	mshci_writel(host, mshci_readl(host, MSHCI_CTRL) | INT_ENABLE,
+		MSHCI_CTRL);
+	mshci_fifo_init(host);
+	mshci_writel(host, 0xfffff, MSHCI_DEBNCE);
+	mshci_writel(host, 0x0, MSHCI_CTYPE);
+	if (host->flags & MSHCI_USE_IDMA) {
+		mshci_writel(host, BMOD_IDMAC_RESET, MSHCI_BMOD);
+		while ((mshci_readl(host, MSHCI_BMOD) & BMOD_IDMAC_RESET)
+			&& --count)
+			; /* nothing to do */
+		mshci_writel(host, (mshci_readl(host, MSHCI_BMOD) |
+				(BMOD_IDMAC_ENABLE|BMOD_IDMAC_FB)), MSHCI_BMOD);
+	}
+	/* forget the cached bus state, so set_ios programs it all again */
+	host->clock = 0;
+	host->pwr = 0;
+}
+#endif
 
 /*****************************************************************************\
  *                                                                           *
@@ -832,7 +920,17 @@ static void mshci_send_command(struct mshci_host *host, struct mmc_command *cmd)
 	mshci_writel(host, (mshci_readl(host, MSHCI_CTRL) & ~INT_ENABLE),
 					MSHCI_CTRL);
 
+#ifdef CONFIG_MACH_SF2
+	/*
+	 * GC200: while the eMMC is not up yet, a locked-up controller would
+	 * otherwise hold the host for 10 s per command and block the retry in
+	 * mshci-s3c.c; card init commands never need more than a few ms.
+	 */
+	mod_timer(&host->timer, jiffies + (mshci_sf2_card_up(host) ?
+						  10 * HZ : HZ / 2));
+#else
 	mod_timer(&host->timer, jiffies + 10 * HZ);
+#endif
 
 	host->cmd = cmd;
 
@@ -1062,7 +1160,13 @@ static void mshci_send_sbc(struct mshci_host *host, struct mmc_command *cmd)
 
 	host->cmd = cmd;
 
+#ifdef CONFIG_MACH_SF2
+	/* as in mshci_send_command: short while the eMMC is not up yet */
+	mod_timer(&host->timer, jiffies + (mshci_sf2_card_up(host) ?
+						  10 * HZ : HZ / 2));
+#else
 	mod_timer(&host->timer, jiffies + 10 * HZ);
+#endif
 
 	mshci_writel(host, cmd->arg, MSHCI_CMDARG);
 
@@ -2128,6 +2232,10 @@ int mshci_add_host(struct mshci_host *host)
 
 	setup_timer(&host->timer, mshci_timeout_timer, (unsigned long)host);
 
+#ifdef CONFIG_MACH_SF2
+	/* no interrupt left over from the bootloader may reach mshci_irq */
+	mshci_quiesce_idmac(host);
+#endif
 	ret = request_irq(host->irq, mshci_irq, IRQF_SHARED,
 		mmc_hostname(mmc), host);
 	if (ret)

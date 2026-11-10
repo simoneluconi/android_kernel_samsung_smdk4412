@@ -29,6 +29,10 @@
 #include <plat/clock.h>
 #include <plat/cpu.h>
 
+#ifdef CONFIG_MACH_SF2
+#include <linux/mmc/card.h>
+#endif
+
 #include "mshci.h"
 
 #ifdef CONFIG_MMC_MSHCI_S3C_DMA_MAP
@@ -64,12 +68,77 @@ struct mshci_s3c {
 
 	struct clk		*clk_io;
 	struct clk		*clk_bus[MAX_BUS_CLK];
+#ifdef CONFIG_MACH_SF2
+	struct delayed_work	sf2_retry;
+	int			sf2_tries;
+#endif
 };
 
 static inline struct mshci_s3c *to_s3c(struct mshci_host *host)
 {
 	return mshci_priv(host);
 }
+
+#ifdef CONFIG_MACH_SF2
+/*
+ * GC200 eMMC after a warm reboot: card init fails about half the time (the
+ * controller locks up on its first commands: HLE, "cmd_strt_bit not
+ * released"), whatever is reset beforehand, while a cold boot always works.
+ * The attempts look independent, so retry: power-cycle the card and restart
+ * the controller's clocks, reset the controller and ask the core to scan
+ * again, up to SF2_EMMC_TRIES times.
+ */
+#define SF2_EMMC_TRIES	8
+
+static void sf2_emmc_cold_reset(struct mshci_s3c *sc, struct platform_device *pdev)
+{
+	struct s3c_mshci_platdata *pdata = pdev->dev.platform_data;
+	int ptr;
+
+	for (ptr = 0; ptr < MAX_BUS_CLK; ptr++)
+		if (sc->clk_bus[ptr])
+			clk_disable(sc->clk_bus[ptr]);
+	clk_disable(sc->clk_io);
+	if (pdata->init_card)
+		pdata->init_card(pdev);		/* eMMC_EN off 100 ms, then on */
+	clk_enable(sc->clk_io);
+	for (ptr = 0; ptr < MAX_BUS_CLK; ptr++)
+		if (sc->clk_bus[ptr])
+			clk_enable(sc->clk_bus[ptr]);
+}
+
+static void sf2_emmc_retry(struct work_struct *work)
+{
+	struct mshci_s3c *sc = container_of(to_delayed_work(work),
+					    struct mshci_s3c, sf2_retry);
+	struct mmc_host *mmc = sc->host->mmc;
+
+	/* wait for any scan in progress to finish */
+	mmc_claim_host(mmc);
+	/* registered, not just set early by Samsung's moviNAND code */
+	if (mmc->card && mmc_card_present(mmc->card)) {
+		mmc_release_host(mmc);
+		if (sc->sf2_tries)
+			pr_info("%s: GC200 eMMC up after %d retries\n",
+				mmc_hostname(mmc), sc->sf2_tries);
+		return;
+	}
+	if (sc->sf2_tries >= SF2_EMMC_TRIES) {
+		mmc_release_host(mmc);
+		pr_err("%s: GC200 eMMC still missing after %d retries\n",
+			mmc_hostname(mmc), sc->sf2_tries);
+		return;
+	}
+	sc->sf2_tries++;
+	pr_warn("%s: GC200 eMMC not found, retry %d\n", mmc_hostname(mmc),
+		sc->sf2_tries);
+	sf2_emmc_cold_reset(sc, sc->pdev);
+	mshci_sf2_reinit(sc->host);
+	mmc_release_host(mmc);
+	mmc_detect_change(mmc, 0);
+	schedule_delayed_work(&sc->sf2_retry, msecs_to_jiffies(1500));
+}
+#endif
 
 /**
  * mshci_s3c_get_max_clk - callback to get maximum clock frequency.
@@ -508,7 +577,29 @@ static int __devinit mshci_s3c_probe(struct platform_device *pdev)
 		mshci_s3c_cfg_wp(pdata->wp_gpio);
 	}
 
+#ifdef CONFIG_MACH_SF2
+	/*
+	 * After a warm reboot the GC200 eMMC often fails its first command (HLE,
+	 * "cmd_strt_bit not released"), while a battery pull always works. Make
+	 * the warm case look like the cold one: stop the controller's clocks,
+	 * power-cycle the eMMC through eMMC_EN (init_card: 100 ms off), then
+	 * clock the controller again before mshci_add_host resets it.
+	 */
+	sf2_emmc_cold_reset(sc, pdev);
+	dev_info(dev, "GC200: eMMC power-cycled and controller clocks restarted\n");
+	/* the soldered eMMC only: a failed init must not become an SDIO card */
+	if (pdata->cd_type == S3C_MSHCI_CD_PERMANENT)
+		host->mmc->caps2 |= MMC_CAP2_MMC_ONLY;
+#endif
+
 	ret = mshci_add_host(host);
+
+#ifdef CONFIG_MACH_SF2
+	if (!ret && pdata->cd_type == S3C_MSHCI_CD_PERMANENT) {
+		INIT_DELAYED_WORK(&sc->sf2_retry, sf2_emmc_retry);
+		schedule_delayed_work(&sc->sf2_retry, msecs_to_jiffies(1500));
+	}
+#endif
 
 	if (pdata->cd_type == S3C_MSHCI_CD_GPIO &&
 		gpio_is_valid(pdata->ext_cd_gpio)) {

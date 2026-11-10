@@ -455,6 +455,9 @@ static inline void *mshci_priv(struct mshci_host *host)
 }
 
 extern int mshci_add_host(struct mshci_host *host);
+#ifdef CONFIG_MACH_SF2
+extern void mshci_sf2_reinit(struct mshci_host *host);
+#endif
 extern void mshci_remove_host(struct mshci_host *host, int dead);
 
 #ifdef CONFIG_PM
