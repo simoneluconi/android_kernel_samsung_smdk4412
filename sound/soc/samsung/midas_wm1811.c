@@ -1536,6 +1536,18 @@ static int midas_wm1811_init_paiftx(struct snd_soc_pcm_runtime *rtd)
 
 	wm1811->codec = codec;
 
+#if defined(CONFIG_MACH_SF2)
+	/* GC200: hidden WM1811 registers for Samsung's earphone standard
+	 * (rev 1.1), as Samsung's GC200 kernel sets them */
+	snd_soc_write(codec, 0x102, 0x3);	/* test/user key */
+	snd_soc_write(codec, 0xcb, 0x5151);	/* bandgap */
+	snd_soc_write(codec, 0xd3, 0x3f3f);	/* mic detect levels 1-4 */
+	snd_soc_write(codec, 0xd4, 0x3f3f);
+	snd_soc_write(codec, 0xd5, 0x3f3f);
+	snd_soc_write(codec, 0xd6, 0x3228);
+	snd_soc_write(codec, 0x102, 0x0);	/* reset the key */
+#endif
+
 	midas_micd_set_rate(codec);
 
 #ifdef CONFIG_SEC_DEV_JACK

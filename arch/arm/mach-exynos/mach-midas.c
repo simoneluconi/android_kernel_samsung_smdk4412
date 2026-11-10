@@ -928,13 +928,26 @@ static void motor_init_hw(void)
 	if (gpio_request(EXYNOS4_GPD0(0), "VIBTONE_PWM") < 0)
 		printk(KERN_ERR "[VIB] gpio requst is failed\n");
 	else {
+#ifdef CONFIG_MACH_SF2
+		/* the GC200 drives the motor from PWM0 on this pin */
+		s3c_gpio_cfgpin(EXYNOS4_GPD0(0), S3C_GPIO_SFN(0x2));
+#else
 		gpio_direction_output(EXYNOS4_GPD0(0), 0);
+#endif
 		printk(KERN_DEBUG "[VIB] gpio request is succeed\n");
 	}
 }
 
 static void motor_en(bool enable)
 {
+#ifdef CONFIG_MACH_SF2
+	if (enable) {
+		s3c_gpio_cfgpin(EXYNOS4_GPD0(0), S3C_GPIO_SFN(0x2));
+		printk(KERN_DEBUG "[VIB] motor_enabled GPIO GPD0(0) : %d\n",
+		       gpio_get_value(EXYNOS4_GPD0(0)));
+		return;
+	}
+#endif
 	gpio_direction_output(EXYNOS4_GPD0(0), enable);
 	printk(KERN_DEBUG "[VIB] motor_enabled GPIO GPD0(0) : %d\n",
 	       gpio_get_value(EXYNOS4_GPD0(0)));
@@ -962,7 +975,11 @@ static void motor_en(bool enable)
 static struct max77693_haptic_platform_data max77693_haptic_pdata = {
 #ifdef CONFIG_MACH_GC1
 	.reg2 = MOTOR_ERM,
+#ifdef CONFIG_MACH_SF2
+	.pwm_id = 0,
+#else
 	.pwm_id = 1,
+#endif
 	.init_hw = motor_init_hw,
 	.motor_en = motor_en,
 #else
@@ -972,7 +989,11 @@ static struct max77693_haptic_platform_data max77693_haptic_pdata = {
 	.motor_en = NULL,
 #endif
 	.max_timeout = 10000,
+#ifdef CONFIG_MACH_SF2
+	.duty = 34113,
+#else
 	.duty = 35500,
+#endif
 	.period = 37904,
 	.regulator_name = "vmotor",
 };
@@ -1564,7 +1585,9 @@ static struct samsung_battery_platform_data samsung_battery_pdata = {
 	.emer_lv1_interval = 30,
 	.emer_lv2_interval = 10,
 
-#if defined(CONFIG_MACH_GC1)
+#if defined(CONFIG_MACH_SF2)
+	.recharge_voltage = 4140000,
+#elif defined(CONFIG_MACH_GC1)
 	.recharge_voltage = 4150000,
 #else
 	/* it will be cacaluated in probe */
@@ -1655,6 +1678,11 @@ static struct samsung_battery_platform_data samsung_battery_pdata = {
 	.overheat_recovery_temp = 430,
 	.freeze_stop_temp = -50,
 	.freeze_recovery_temp = 30,
+#elif defined(CONFIG_MACH_SF2)
+	.overheat_stop_temp = 600,
+	.overheat_recovery_temp = 460,
+	.freeze_stop_temp = -50,
+	.freeze_recovery_temp = 0,
 #elif defined(CONFIG_MACH_GC1)
 	.overheat_stop_temp = 600,
 	.overheat_recovery_temp = 400,

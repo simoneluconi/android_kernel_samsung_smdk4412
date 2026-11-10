@@ -56,6 +56,12 @@ int wireless_level	= WIRELESS_CHARGE_LEVEL_DEFAULT; // Set wireless default char
 char charge_info_text[30];
 int charge_info_level;
 
+#if defined(CONFIG_MACH_SF2)
+/* The GC200's thermistor reads 7 C high while the LCD is on (Samsung) */
+#define LCD_TEMP_COMPENSATION	70
+int lcd_state(void);
+#endif
+
 static char *supply_list[] = {
 	"battery",
 };
@@ -483,6 +489,10 @@ void battery_update_info(struct battery_info *info)
 	temper = battery_get_temper(info);
 	info->battery_t_delta = temper - info->battery_temper;
 	info->battery_temper = temper;
+#if defined(CONFIG_MACH_SF2)
+	if (lcd_state())
+		info->battery_temper -= LCD_TEMP_COMPENSATION;
+#endif
 
 	/* update current_avg later */
 	info->charge_current_avg = battery_get_curr_avg(info);
@@ -1022,7 +1032,12 @@ static bool battery_temper_cond(struct battery_info *info)
 #endif
 
 	if (info->temper_state == false) {
+#if defined(CONFIG_MACH_SF2)
+		if (info->charge_real_state != POWER_SUPPLY_STATUS_CHARGING &&
+		    info->charge_real_state != POWER_SUPPLY_STATUS_FULL) {
+#else
 		if (info->charge_real_state != POWER_SUPPLY_STATUS_CHARGING) {
+#endif
 			pr_debug("%s: r_state !charging, cs(%d)\n",
 					__func__, info->charge_real_state);
 			return false;

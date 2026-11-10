@@ -1120,10 +1120,13 @@ static void max77693_charger_reg_init(struct max77693_charger_data *chg_data)
 		reg_data = (0x03 << 0);		/* 125mA */
 		reg_data |= (0x00 << 3);	/* 0min */
 	} else {
-#if defined(USE_2STEP_TERM)	/* now only T0 */
+#if defined(USE_2STEP_TERM)	/* T0 and the GC200 */
 #if defined(CONFIG_MACH_KONA)
 		reg_data = (0x05 << 0);		/* 250mA */
 		reg_data |= (0x04 << 3);	/* 40min */
+#elif defined(CONFIG_MACH_SF2)
+		reg_data = (0x04 << 0);		/* 200mA */
+		reg_data |= (0x03 << 3);	/* 30min */
 #else
 
 		reg_data = (0x04 << 0);		/* 200mA */

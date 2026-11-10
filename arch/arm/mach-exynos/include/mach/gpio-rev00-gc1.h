@@ -205,7 +205,12 @@ extern int s3c_gpio_slp_setpull_updown(unsigned int pin, unsigned int config);
 #define GPIO_MHL_INT_AF		S3C_GPIO_SFN(0xF)
 #define GPIO_MHL_WAKE_UP	EXYNOS4212_GPJ1(4)
 
+#ifdef CONFIG_MACH_SF2
+/* The GC200 wires its NFC tag interrupt here */
+#define GPIO_NFC_IRQ		EXYNOS4_GPF0(0)
+#else
 #define GPIO_RGB_SDA_1_8V	EXYNOS4_GPF0(0)
+#endif
 #define GPIO_RGB_SCL_1_8V	EXYNOS4_GPF0(1)
 #define GPIO_RGB_INT		EXYNOS4_GPX2(2)
 #define GPIO_VOL_UP		EXYNOS4212_GPJ1(1)

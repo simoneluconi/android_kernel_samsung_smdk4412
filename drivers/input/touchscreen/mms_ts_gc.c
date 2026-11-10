@@ -300,6 +300,7 @@ struct mms_ts_info {
 	int	max_y;
 	bool	invert_x;
 	bool	invert_y;
+	bool	flip_xy;
 	int	irq;
 	int	(*power) (int on);
 	void	(*input_event)(void *data);
@@ -1339,6 +1340,11 @@ static irqreturn_t mms_ts_interrupt(int irq, void *dev_id)
 			posY = info->max_y - posY;
 			if (posY < 0)
 				posY = 0;
+		}
+		if (info->flip_xy) {
+			int t = posX;
+			posX = posY;
+			posY = t;
 		}
 		if (id >= MAX_FINGERS) {
 			dev_notice(&client->dev, \
@@ -2828,6 +2834,7 @@ static int __devinit mms_ts_probe(struct i2c_client *client,
 		info->max_y = info->pdata->max_y;
 		info->invert_x = info->pdata->invert_x;
 		info->invert_y = info->pdata->invert_y;
+		info->flip_xy = info->pdata->flip_xy;
 		info->config_fw_version = info->pdata->config_fw_version;
 		info->input_event = info->pdata->input_event;
 		info->register_cb = info->pdata->register_cb;
@@ -2879,10 +2886,10 @@ static int __devinit mms_ts_probe(struct i2c_client *client,
 	__set_bit(INPUT_PROP_DIRECT, input_dev->propbit);
 
 	input_mt_init_slots(input_dev, MAX_FINGERS);
-	input_set_abs_params(input_dev, ABS_MT_POSITION_X,
-			     0, (info->max_x)-1, 0, 0);
-	input_set_abs_params(input_dev, ABS_MT_POSITION_Y,
-				0, (info->max_y)-1, 0, 0);
+	input_set_abs_params(input_dev, ABS_MT_POSITION_X, 0,
+			(info->flip_xy ? info->max_y : info->max_x) - 1, 0, 0);
+	input_set_abs_params(input_dev, ABS_MT_POSITION_Y, 0,
+			(info->flip_xy ? info->max_x : info->max_y) - 1, 0, 0);
 	input_set_abs_params(input_dev, ABS_MT_WIDTH_MAJOR,
 				0, MAX_WIDTH, 0, 0);
 	input_set_abs_params(input_dev, ABS_MT_TOUCH_MAJOR,

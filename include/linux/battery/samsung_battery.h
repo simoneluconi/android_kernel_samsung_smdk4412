@@ -217,7 +217,7 @@ enum online_property {
 };
 
 /* use 2step charge termination */
-#if defined(CONFIG_MACH_T0)
+#if defined(CONFIG_MACH_T0) || defined(CONFIG_MACH_SF2)
 #define USE_2STEP_TERM
 #else
 #undef USE_2STEP_TERM

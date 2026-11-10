@@ -418,7 +418,12 @@ static struct regulator_init_data safeout2_init_data = {
 		.always_on	= 0,
 		.boot_on	= 0,
 		.state_mem	= {
+#ifdef CONFIG_MACH_SF2
+			/* as Samsung's GC200 sf2-power.c */
+			.enabled = 1,
+#else
 			.disabled = 1,
+#endif
 		},
 	},
 	.num_consumer_supplies	= ARRAY_SIZE(safeout2_supply),

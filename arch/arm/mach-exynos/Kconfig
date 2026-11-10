@@ -1147,6 +1147,13 @@ config P4NOTE_00_BD
 config GC1_00_BD
 	bool "Galaxy Camera common Board"
 
+config MACH_SF2
+	bool "Galaxy Camera 2 (EK-GC200, SF2) on the Galaxy Camera board"
+	depends on MACH_GC1
+	help
+	  The GC200 is built as a GC1 board plus these differences, as in
+	  Samsung's GC200 kernel (sf2wifi_00_defconfig).
+
 config T0_00_BD
 	bool "T0 Revison 00 board"
 	default n

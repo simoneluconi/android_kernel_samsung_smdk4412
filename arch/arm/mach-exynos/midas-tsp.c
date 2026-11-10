@@ -724,7 +724,13 @@ static void melfas_register_callback(void *cb)
 static struct melfas_tsi_platform_data mms_ts_pdata = {
 	.max_x = 720,
 	.max_y = 1280,
+#if defined(CONFIG_MACH_SF2)
+	/* the GC200's touch panel is mounted rotated (Samsung's sf2 pdata) */
+	.invert_x = 1,
+	.flip_xy = 1,
+#else
 	.invert_x = 0,
+#endif
 	.invert_y = 0,
 	.gpio_int = GPIO_TSP_INT,
 	.gpio_scl = GPIO_TSP_SCL_18V,

@@ -105,6 +105,15 @@ static LIST_HEAD(lcd_info_list);
 static DEFINE_MUTEX(mipi_lock);
 static struct dsim_global *g_dsim;
 
+#if defined(CONFIG_MACH_SF2)
+/* For the GC200's battery temperature compensation (samsung_battery.c) */
+int lcd_state(void)
+{
+	return g_dsim && g_dsim->mipi_ddi_pd->resume_complete;
+}
+EXPORT_SYMBOL(lcd_state);
+#endif
+
 static struct s5p_platform_dsim *to_dsim_plat(struct device *dev)
 {
 	struct platform_device *pdev = to_platform_device(dev);

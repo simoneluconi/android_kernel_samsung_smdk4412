@@ -831,7 +831,10 @@ static int __devinit s5m_rtc_probe(struct platform_device *pdev)
 
 	if (info->wtsr_smpl) {
 		s5m_rtc_enable_wtsr(info, true);
+#ifndef CONFIG_MACH_SF2
+		/* Samsung's GC200 kernel keeps SMPL off (smpl_en = false) */
 		s5m_rtc_enable_smpl(info, true);
+#endif
 	}
 
 	device_init_wakeup(&pdev->dev, 1);

@@ -1058,6 +1058,10 @@ static int lcd_power_on(void *ld, int enable)
 		regulator_put(regulator);
 #endif
 	} else {
+#ifdef CONFIG_MACH_SF2
+		/* the GC200 holds the panel in reset before cutting its supplies */
+		gpio_set_value(GPIO_MLCD_RST, 0);
+#endif
 #ifdef CONFIG_MACH_GC1
 		regulator = regulator_get(NULL, "lcd_io_1.8v");
 		if (IS_ERR(regulator))
@@ -1085,7 +1089,9 @@ static int lcd_power_on(void *ld, int enable)
 #if defined(GPIO_LCD_22V_EN_00)
 		gpio_set_value(GPIO_LCD_22V_EN_00, GPIO_LEVEL_LOW);
 #endif
+#ifndef CONFIG_MACH_SF2
 		gpio_set_value(GPIO_MLCD_RST, 0);
+#endif
 	}
 
 out:

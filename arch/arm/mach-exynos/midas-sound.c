@@ -101,7 +101,11 @@ static struct jack_zone midas_jack_zones[] = {
 		/* 0 < adc <= 1200, unstable zone, default to 3pole if it stays
 		 * in this range for 100ms (10ms delays, 10 samples)
 		 */
+#if defined(CONFIG_MACH_SF2)
+		.adc_high = 1250,
+#else
 		.adc_high = 1200,
+#endif
 		.delay_ms = 10,
 		.check_count = 10,
 		.jack_type = SEC_HEADSET_3POLE,
@@ -309,7 +313,7 @@ static struct wm8994_pdata wm1811_pdata = {
 	.micbias = {0x22, 0x22},
 #elif defined(CONFIG_MACH_C1_USA_ATT)
 	.micbias = {0x2f, 0x29},
-#elif defined(CONFIG_MACH_KONA)
+#elif defined(CONFIG_MACH_KONA) || defined(CONFIG_MACH_SF2)
 	.micbias = {0x2f, 0x2f},
 #else
 	.micbias = {0x2f, 0x27},
@@ -521,7 +525,7 @@ void __init midas_sound_init(void)
 	printk(KERN_INFO "Sound: start %s\n", __func__);
 	
 #ifdef CONFIG_USE_ADC_DET
-#if defined(CONFIG_MACH_KONA)
+#if defined(CONFIG_MACH_KONA) || defined(CONFIG_MACH_SF2)
 		midas_sound_pdata.use_jackdet_type = 1;
 #else
 		midas_sound_pdata.use_jackdet_type = 0;

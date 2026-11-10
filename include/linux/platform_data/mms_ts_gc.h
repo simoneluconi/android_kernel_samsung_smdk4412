@@ -22,6 +22,7 @@ struct melfas_tsi_platform_data {
 
 	bool	invert_x;
 	bool	invert_y;
+	bool	flip_xy;	/* swap X and Y (the GC200's mounting) */
 
 	int	gpio_int;
 	int	gpio_sda;
