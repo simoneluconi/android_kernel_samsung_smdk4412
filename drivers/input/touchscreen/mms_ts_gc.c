@@ -29,11 +29,16 @@
 /* #define ESD_DEBUG */
 
 #include <linux/delay.h>
-/* earlysuspend is gone from this kernel: use the plain PM callbacks below */
+/*
+ * earlysuspend is gone from this kernel: the panel is powered down when the
+ * screen blanks through an fb notifier, and with the whole system through
+ * the plain PM callbacks below
+ */
 #undef CONFIG_HAS_EARLYSUSPEND
 #ifdef CONFIG_HAS_EARLYSUSPEND
 #include <linux/earlysuspend.h>
 #endif
+#include <linux/fb.h>
 #include <linux/firmware.h>
 #include <linux/gpio.h>
 #include <linux/i2c.h>
@@ -315,6 +320,10 @@ struct mms_ts_info {
 #ifdef CONFIG_HAS_EARLYSUSPEND
 	struct early_suspend early_suspend;
 #endif
+#ifdef CONFIG_FB
+	struct notifier_block fb_notif;
+	bool fb_suspended;	/* powered down because the screen is blank */
+#endif
 	struct mutex lock;
 
 	void (*register_cb)(void *);
@@ -351,6 +360,10 @@ struct mms_ts_info {
 #ifdef CONFIG_HAS_EARLYSUSPEND
 static void mms_ts_early_suspend(struct early_suspend *h);
 static void mms_ts_late_resume(struct early_suspend *h);
+#endif
+#ifdef CONFIG_FB
+static int mms_ts_fb_notifier(struct notifier_block *self,
+			      unsigned long event, void *data);
 #endif
 
 #if SEC_TSP_FACTORY_TEST
@@ -2928,6 +2941,12 @@ static int __devinit mms_ts_probe(struct i2c_client *client,
 	info->early_suspend.resume = mms_ts_late_resume;
 	register_early_suspend(&info->early_suspend);
 #endif
+#ifdef CONFIG_FB
+	info->fb_suspended = false;
+	info->fb_notif.notifier_call = mms_ts_fb_notifier;
+	if (fb_register_client(&info->fb_notif))
+		dev_err(&client->dev, "failed to register the fb notifier\n");
+#endif
 
 	info->callbacks.inform_charger = melfas_ta_cb;
 	if (info->register_cb)
@@ -3018,6 +3037,9 @@ static int __devexit mms_ts_remove(struct i2c_client *client)
 #ifdef CONFIG_HAS_EARLYSUSPEND
 	unregister_early_suspend(&info->early_suspend);
 #endif
+#ifdef CONFIG_FB
+	fb_unregister_client(&info->fb_notif);
+#endif
 	if (info->irq >= 0)
 		free_irq(info->irq, info);
 	input_unregister_device(info->input_dev);
@@ -3096,10 +3118,65 @@ static void mms_ts_late_resume(struct early_suspend *h)
 }
 #endif
 
+#ifdef CONFIG_FB
+/*
+ * Power the panel down while the screen is blank, not only in system
+ * suspend: with a wakelock held (USB, a download, the camera app) the
+ * system stays awake with the screen off, and the controller kept scanning
+ * and could report ghost touches.
+ */
+static int mms_ts_fb_notifier(struct notifier_block *self,
+			      unsigned long event, void *data)
+{
+	struct mms_ts_info *info = container_of(self, struct mms_ts_info,
+						fb_notif);
+	struct fb_event *evdata = data;
+	int blank;
+
+	if (event != FB_EVENT_BLANK || !evdata || !evdata->data)
+		return 0;
+
+	/* only the main panel (fb0); FIMD windows and the HDMI fbs too blank */
+	if (evdata->info && evdata->info->node != 0)
+		return 0;
+
+	blank = *(int *)evdata->data;
+	switch (blank) {
+	case FB_BLANK_UNBLANK:
+		if (info->fb_suspended) {
+			info->fb_suspended = false;
+			mms_ts_resume(&info->client->dev);
+		}
+		break;
+	case FB_BLANK_POWERDOWN:
+		if (!info->fb_suspended) {
+			mms_ts_suspend(&info->client->dev);
+			info->fb_suspended = true;
+		}
+		break;
+	default:
+		break;
+	}
+	return 0;
+}
+#endif
+
 #if defined(CONFIG_PM) && !defined(CONFIG_HAS_EARLYSUSPEND)
+static int mms_ts_pm_resume(struct device *dev)
+{
+#ifdef CONFIG_FB
+	struct mms_ts_info *info = i2c_get_clientdata(to_i2c_client(dev));
+
+	/* the screen is still blank: stay off until it unblanks */
+	if (info->fb_suspended)
+		return 0;
+#endif
+	return mms_ts_resume(dev);
+}
+
 static const struct dev_pm_ops mms_ts_pm_ops = {
 	.suspend = mms_ts_suspend,
-	.resume = mms_ts_resume,
+	.resume = mms_ts_pm_resume,
 };
 #endif
 
