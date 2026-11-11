@@ -485,6 +485,31 @@ static int watchdog_nmi_enable(int cpu) { return 0; }
 static void watchdog_nmi_disable(int cpu) { return; }
 #endif /* CONFIG_HARDLOCKUP_DETECTOR */
 
+#ifdef CONFIG_HARDLOCKUP_DETECTOR_OTHER_CPU
+/*
+ * Each cpu checks the next online cpu, so a hotplug changes who checks
+ * whom. When a cpu goes offline, the cpu before it starts checking the
+ * cpu after it, comparing against the hrtimer count the offlined cpu saved
+ * at its last check, possibly less than one sample period ago: a false
+ * hard lockup (seen on the GC200 two seconds after "CPU1: shutdown", with
+ * every cpu idle). A cpu coming online likewise starts checking a cpu
+ * another one checked recently. Touch the next cpu in both cases, so its
+ * first check by the new buddy is skipped (as Linux's buddy detector does
+ * in watchdog_hardlockup_enable/disable).
+ */
+static void watchdog_touch_next_cpu(int cpu)
+{
+	int next = cpumask_next(cpu, cpu_online_mask);
+
+	if (next >= nr_cpu_ids)
+		next = cpumask_first(cpu_online_mask);
+	if (next < nr_cpu_ids && next != cpu)
+		per_cpu(watchdog_nmi_touch, next) = true;
+}
+#else
+static inline void watchdog_touch_next_cpu(int cpu) { }
+#endif
+
 /* prepare/enable/disable routines */
 static void watchdog_prepare_cpu(int cpu)
 {
@@ -505,6 +530,7 @@ static void watchdog_prepare_cpu(int cpu)
 	 */
 	per_cpu(watchdog_nmi_touch, cpu) = true;
 #endif
+	watchdog_touch_next_cpu(cpu);
 }
 
 static int watchdog_enable(int cpu)
@@ -633,6 +659,7 @@ cpu_callback(struct notifier_block *nfb, unsigned long action, void *hcpu)
 		break;
 	case CPU_ONLINE:
 	case CPU_ONLINE_FROZEN:
+		watchdog_touch_next_cpu(hotcpu);
 		if (watchdog_enabled)
 			watchdog_enable(hotcpu);
 		break;
@@ -641,8 +668,18 @@ cpu_callback(struct notifier_block *nfb, unsigned long action, void *hcpu)
 	case CPU_UP_CANCELED_FROZEN:
 		watchdog_disable(hotcpu);
 		break;
+	case CPU_DYING:
+	case CPU_DYING_FROZEN:
+		/*
+		 * On the dying cpu, inside stop_machine: it has just left
+		 * cpu_online_mask and no other cpu can run a check before this
+		 */
+		watchdog_touch_next_cpu(hotcpu);
+		break;
 	case CPU_DEAD:
 	case CPU_DEAD_FROZEN:
+		/* hotcpu is out of cpu_online_mask by now */
+		watchdog_touch_next_cpu(hotcpu);
 		watchdog_disable(hotcpu);
 		break;
 #endif /* CONFIG_HOTPLUG_CPU */
