@@ -1717,6 +1717,22 @@ static int cpufreq_governor_dbs(struct cpufreq_policy *policy,
 	case CPUFREQ_GOV_STOP:
 #ifdef CONFIG_FB
 		fb_unregister_client(&fb_notif);
+		/*
+		 * Undo the screen-off settings. GOV_START clears fb_suspended,
+		 * so a governor switch while the screen is off (the power HAL's
+		 * profiles do that) used to leave the screen-off hotplug lock in
+		 * place for good: the next unblank found nothing to restore and
+		 * every later blank saved the stale lock as the value to restore.
+		 */
+		if (fb_suspended) {
+#if EARLYSUSPEND_HOTPLUGLOCK
+			atomic_set(&g_hotplug_lock, dbs_tuners_ins.fb_suspend);
+#endif
+			dbs_tuners_ins.fb_suspend = -1;
+			dbs_tuners_ins.freq_step = prev_freq_step;
+			dbs_tuners_ins.sampling_rate = prev_sampling_rate;
+			fb_suspended = false;
+		}
 #endif
 #if !EARLYSUSPEND_HOTPLUGLOCK
 		unregister_pm_notifier(&pm_notifier);
