@@ -3613,6 +3613,15 @@ SYSCALL_DEFINE5(renameat2, int, olddfd, const char __user *, oldname,
 	error = -ENOENT;
 	if (!old_dentry->d_inode)
 		goto exit4;
+	/*
+	 * The renameat2 backport looked the target up here, for the
+	 * RENAME_NOREPLACE check, and again below where 3.4's renameat did:
+	 * the second lookup overwrote new_dentry, so every rename leaked a
+	 * reference on the target dentry (a negative one for a new name),
+	 * which showed as "Dentry ... still in use" when the microSD was
+	 * unmounted after the camera app saved a photo. Look it up once, and
+	 * drop it on every exit below.
+	 */
 	new_dentry = lookup_hash(&newnd);
 	error = PTR_ERR(new_dentry);
 	if (IS_ERR(new_dentry))
@@ -3624,18 +3633,14 @@ SYSCALL_DEFINE5(renameat2, int, olddfd, const char __user *, oldname,
 	if (!S_ISDIR(old_dentry->d_inode->i_mode)) {
 		error = -ENOTDIR;
 		if (oldnd.last.name[oldnd.last.len])
-			goto exit4;
+			goto exit5;
 		if (newnd.last.name[newnd.last.len])
-			goto exit4;
+			goto exit5;
 	}
 	/* source should not be ancestor of target */
 	error = -EINVAL;
 	if (old_dentry == trap)
-		goto exit4;
-	new_dentry = lookup_hash(&newnd);
-	error = PTR_ERR(new_dentry);
-	if (IS_ERR(new_dentry))
-		goto exit4;
+		goto exit5;
 	/* target should not be an ancestor of source */
 	error = -ENOTEMPTY;
 	if (new_dentry == trap)
