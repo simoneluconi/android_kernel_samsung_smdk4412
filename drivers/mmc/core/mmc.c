@@ -1508,8 +1508,17 @@ static int mmc_init_card(struct mmc_host *host, u32 ocr,
 	return 0;
 
 free_card:
-	if (!oldcard)
+	if (!oldcard) {
+		/*
+		 * The moviNAND smart report above sets host->card early; do not
+		 * leave it pointing at the freed card (mmc_power_off's power-off
+		 * notification then used it and hit BUG_ON(!card->host) after a
+		 * failed init on the GC200)
+		 */
+		if (host->card == card)
+			host->card = NULL;
 		mmc_remove_card(card);
+	}
 err:
 	mmc_free_ext_csd(ext_csd);
 
