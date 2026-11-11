@@ -190,6 +190,14 @@ static int symbol_valid(struct sym_entry *s)
 	/* Exclude linker generated symbols which vary between passes */
 		"_SDA_BASE_",		/* ppc */
 		"_SDA2_BASE_",		/* ppc */
+	/*
+	 * The end of __modver sits just below the page-aligned end of
+	 * .rodata; when the kallsyms tables grow, it lands on the boundary
+	 * among other symbols there and the next pass orders the names
+	 * differently ("Inconsistent kallsyms data", seen on the gd1 build)
+	 */
+		"__start___modver",
+		"__stop___modver",
 		NULL };
 	int i;
 	int offset = 1;
