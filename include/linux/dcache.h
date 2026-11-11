@@ -296,6 +296,20 @@ extern struct dentry *__d_lookup_rcu(const struct dentry *parent,
  * __d_rcu_to_refcount operates on a dentry,seq pair that was returned
  * by __d_lookup_rcu, to get a reference on an rcu-walk dentry.
  */
+/*
+ * Debug trace of dentry references, off by default (fs/dcache.c,
+ * /sys/module/dcache/parameters/trace_name): records who takes and drops
+ * references on dentries whose name contains a given string, and prints
+ * that history if such a dentry is still referenced at unmount.
+ */
+extern int dentry_trace_on;
+extern void __dentry_trace(struct dentry *dentry, char op);
+static inline void dentry_trace(struct dentry *dentry, char op)
+{
+	if (unlikely(dentry_trace_on))
+		__dentry_trace(dentry, op);
+}
+
 static inline int __d_rcu_to_refcount(struct dentry *dentry, unsigned seq)
 {
 	int ret = 0;
@@ -304,6 +318,7 @@ static inline int __d_rcu_to_refcount(struct dentry *dentry, unsigned seq)
 	if (!read_seqcount_retry(&dentry->d_seq, seq)) {
 		ret = 1;
 		dentry->d_count++;
+		dentry_trace(dentry, 'r');
 	}
 
 	return ret;
@@ -336,8 +351,10 @@ extern char *dentry_path(struct dentry *, char *, int);
  */
 static inline struct dentry *dget_dlock(struct dentry *dentry)
 {
-	if (dentry)
+	if (dentry) {
 		dentry->d_count++;
+		dentry_trace(dentry, '+');
+	}
 	return dentry;
 }
 

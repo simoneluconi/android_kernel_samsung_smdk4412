@@ -39,6 +39,96 @@
 #include <linux/ratelimit.h>
 #include "internal.h"
 #include "mount.h"
+#include <linux/moduleparam.h>
+#include <linux/stacktrace.h>
+
+/*
+ * Debug trace of dentry references on exFAT (the microSD). Off by default:
+ *   echo -n GC100_0 > /sys/module/dcache/parameters/trace_name
+ *   echo 1 > /sys/module/dcache/parameters/trace
+ * (-n: the string is matched as written, a trailing newline included)
+ * records every reference taken ('A' alloc, '+' dget, 'L' lookup,
+ * 'r' rcu-walk) and dropped ('-' dput) on dentries whose name contains
+ * trace_name, with the task and a short stack; a dentry still referenced
+ * at unmount then prints its history. It found the renameat2 leak
+ * (fs/namei.c) in one shot.
+ */
+int dentry_trace_on;
+EXPORT_SYMBOL(dentry_trace_on);
+module_param_named(trace, dentry_trace_on, int, 0644);
+static char dentry_trace_name[48];
+module_param_string(trace_name, dentry_trace_name, sizeof(dentry_trace_name), 0644);
+
+#define DTRACE_EVENTS	4096
+#define DTRACE_DEPTH	12
+
+struct dtrace_event {
+	struct dentry *dentry;
+	char op;
+	int count;
+	char comm[TASK_COMM_LEN];
+	unsigned int nr;
+	unsigned long entries[DTRACE_DEPTH];
+};
+
+static struct dtrace_event dtrace_ring[DTRACE_EVENTS];
+static unsigned int dtrace_next;
+static DEFINE_SPINLOCK(dtrace_lock);
+
+void __dentry_trace(struct dentry *dentry, char op)
+{
+	struct dtrace_event *ev;
+	struct stack_trace trace;
+	unsigned long flags;
+
+	if (!dentry_trace_name[0] ||
+	    !strstr((const char *)dentry->d_name.name, dentry_trace_name))
+		return;
+	/* only the microSD's filesystem: FUSE's own dentries would flood it */
+	if (!dentry->d_sb || !dentry->d_sb->s_type ||
+	    strcmp(dentry->d_sb->s_type->name, "exfat"))
+		return;
+
+	spin_lock_irqsave(&dtrace_lock, flags);
+	ev = &dtrace_ring[dtrace_next++ % DTRACE_EVENTS];
+	ev->dentry = dentry;
+	ev->op = op;
+	ev->count = dentry->d_count;
+	get_task_comm(ev->comm, current);
+	trace.nr_entries = 0;
+	trace.max_entries = DTRACE_DEPTH;
+	trace.entries = ev->entries;
+	trace.skip = 2;
+	save_stack_trace(&trace);
+	ev->nr = trace.nr_entries;
+	spin_unlock_irqrestore(&dtrace_lock, flags);
+}
+EXPORT_SYMBOL(__dentry_trace);
+
+static void dentry_trace_dump(struct dentry *dentry)
+{
+	unsigned int i, n = 0;
+
+	if (!dentry_trace_on)
+		return;
+	printk(KERN_ERR "dentry trace for %p:\n", dentry);
+	for (i = 0; i < DTRACE_EVENTS; i++) {
+		struct dtrace_event *ev =
+			&dtrace_ring[(dtrace_next + i) % DTRACE_EVENTS];
+		struct stack_trace trace = {
+			.nr_entries = ev->nr,
+			.entries = ev->entries,
+		};
+
+		if (ev->dentry != dentry)
+			continue;
+		printk(KERN_ERR " %c count %d by %s\n", ev->op, ev->count,
+		       ev->comm);
+		print_stack_trace(&trace, 3);
+		n++;
+	}
+	printk(KERN_ERR "dentry trace: %u events\n", n);
+}
 
 /*
  * Usage:
@@ -571,6 +661,7 @@ repeat:
 		might_sleep();
 	spin_lock(&dentry->d_lock);
 	BUG_ON(!dentry->d_count);
+	dentry_trace(dentry, '-');
 	if (dentry->d_count > 1) {
 		dentry->d_count--;
 		spin_unlock(&dentry->d_lock);
@@ -994,6 +1085,7 @@ static void shrink_dcache_for_umount_subtree(struct dentry *dentry)
 				       dentry->d_count,
 				       dentry->d_sb->s_type->name,
 				       dentry->d_sb->s_id);
+				dentry_trace_dump(dentry);
 				WARN_ON(1);
 			}
 
@@ -1345,6 +1437,7 @@ struct dentry *__d_alloc(struct super_block *sb, const struct qstr *name)
 	INIT_LIST_HEAD(&dentry->d_u.d_alias);
 	INIT_LIST_HEAD(&dentry->d_child);
 	d_set_d_op(dentry, dentry->d_sb->s_d_op);
+	dentry_trace(dentry, 'A');
 
 	this_cpu_inc(nr_dentry);
 
@@ -1994,6 +2087,7 @@ struct dentry *__d_lookup(const struct dentry *parent, const struct qstr *name)
 		}
 
 		dentry->d_count++;
+		dentry_trace(dentry, 'L');
 		found = dentry;
 		spin_unlock(&dentry->d_lock);
 		break;
