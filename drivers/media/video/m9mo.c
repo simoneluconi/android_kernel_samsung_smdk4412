@@ -31,6 +31,11 @@
 #include <linux/regulator/machine.h>
 
 #include <media/m9mo_platform.h>
+#ifdef CONFIG_MACH_SF2
+#include <linux/gpio.h>
+#include <mach/gpio.h>
+#include <plat/gpio-cfg.h>
+#endif
 #include "m9mo.h"
 
 #define M9MO_DRIVER_NAME	"M9MO"
@@ -268,7 +273,7 @@ static struct m9mo_control m9mo_ctrls[] = {
 	},
 };
 
-static u8 sysfs_sensor_fw[7] = {0,};
+static u8 sysfs_sensor_fw[M9MO_SENSOR_VER_SIZE] = {0,};
 static u8 sysfs_phone_fw[7] = {0,};
 static u8 sysfs_sensor_type[25] = {0,};
 
@@ -285,6 +290,9 @@ static int m9mo_read(int _line, struct v4l2_subdev *sd,
 	unsigned char data[5];
 	unsigned char recv_data[len + 1];
 	int i, err = 0;
+#ifdef CONFIG_MACH_SF2
+	int len_retry = 3;
+#endif
 
 	if (!client->adapter)
 		return -ENODEV;
@@ -292,6 +300,9 @@ static int m9mo_read(int _line, struct v4l2_subdev *sd,
 	if (len != 0x01 && len != 0x02 && len != 0x04)
 		return -EINVAL;
 
+#ifdef CONFIG_MACH_SF2
+retry:
+#endif
 	msg.addr = client->addr;
 	msg.flags = 0;
 	msg.len = sizeof(data);
@@ -333,9 +344,21 @@ static int m9mo_read(int _line, struct v4l2_subdev *sd,
 		return err;
 	}
 
-	if (recv_data[0] != sizeof(recv_data))
+	if (recv_data[0] != sizeof(recv_data)) {
 		cam_i2c_dbg("expected length %d, but return length %d\n",
 				 sizeof(recv_data), recv_data[0]);
+#ifdef CONFIG_MACH_SF2
+		/* as Samsung's GC200 driver: read again, the D16FL firmware
+		 * sometimes answers short */
+		if (len_retry-- > 0) {
+			msleep(20);
+			goto retry;
+		}
+		cam_err("category %#x, byte %#x: wrong length after retries\n",
+			category, byte);
+		return -EIO;
+#endif
+	}
 
 	if (len == 0x01)
 		*val = recv_data[1];
@@ -2194,8 +2217,8 @@ static int m9mo_get_sensor_fw_version(struct v4l2_subdev *sd)
 	int ois_ver = 0x00;
 	int parm_ver = 0x00;
 	int user_ver_temp;
-	char user_ver[20];
-	char sensor_ver[7];
+	char user_ver[M9MO_FW_VER_LEN + 1];
+	char sensor_ver[M9MO_SENSOR_VER_SIZE];
 	int i = 0;
 
 	cam_err("E\n");
@@ -2237,16 +2260,21 @@ static int m9mo_get_sensor_fw_version(struct v4l2_subdev *sd)
 
 	user_ver[i] = '\0';
 
-	if (user_ver[0] == 'F' && user_ver[1] == 'C') {
-		for (i = 0; i < M9MO_FW_VER_LEN; i++) {
-			if (user_ver[i] == 0x20) {
-				sensor_ver[i] = '\0';
+	/*
+	 * The version token runs up to the first space: FC* on the GC100,
+	 * D16FL* on the GC200. The buffers used to be sized for the GC100's
+	 * six characters, and the "Invalid version" fallback overflowed them.
+	 */
+	memset(sensor_ver, 0, sizeof(sensor_ver));
+	if ((user_ver[0] == 'F' && user_ver[1] == 'C') ||
+			!strncmp(user_ver, "D16FL", 5)) {
+		for (i = 0; i < sizeof(sensor_ver) - 1 && user_ver[i]; i++) {
+			if (user_ver[i] == 0x20)
 				break;
-			}
 			sensor_ver[i] = user_ver[i];
 		}
 	} else {
-		sprintf(sensor_ver, "%s", "Invalid version");
+		strlcpy(sensor_ver, "Invalid", sizeof(sensor_ver));
 	}
 
 	cam_info("f/w version = %x\n", fw_ver);
@@ -2257,11 +2285,10 @@ static int m9mo_get_sensor_fw_version(struct v4l2_subdev *sd)
 	cam_info("user version = %s\n", user_ver);
 	cam_info("sensor version = %s\n", sensor_ver);
 
-	sprintf(state->sensor_ver, "%s", sensor_ver);
-	sprintf(state->sensor_type, "%d %d %d %x",
+	strlcpy(state->sensor_ver, sensor_ver, sizeof(state->sensor_ver));
+	snprintf(state->sensor_type, sizeof(state->sensor_type), "%d %d %d %x",
 			awb_ver, af_ver, ois_ver, parm_ver);
-	memcpy(sysfs_sensor_fw, state->sensor_ver,
-			sizeof(state->sensor_ver));
+	strlcpy(sysfs_sensor_fw, state->sensor_ver, sizeof(sysfs_sensor_fw));
 	memcpy(sysfs_sensor_type, state->sensor_type,
 			sizeof(state->sensor_type));
 	state->isp_fw_ver = fw_ver;
@@ -4018,6 +4045,11 @@ static int m9mo_set_zoom(struct v4l2_subdev *sd, struct v4l2_control *ctrl)
 		digi_val = val - opti_max;
 	}
 
+#ifndef CONFIG_MACH_SF2
+	/*
+	 * Samsung's GC200 driver skips these two writes ("to resolve first AF
+	 * fail when mode change from P mode to Smart Macro mode")
+	 */
 	if (state->recording) {
 		err = m9mo_writeb(sd, M9MO_CATEGORY_LENS,
 			M9MO_LENS_ZOOM_SPEED, 0x00);
@@ -4032,6 +4064,7 @@ static int m9mo_set_zoom(struct v4l2_subdev *sd, struct v4l2_control *ctrl)
 	err = m9mo_writeb(sd, M9MO_CATEGORY_LENS,
 		M9MO_LENS_AF_START_STOP, 0x05);
 	CHECK_ERR(err);
+#endif
 
 	err = m9mo_writeb(sd, M9MO_CATEGORY_LENS,
 		M9MO_LENS_AF_ZOOM_LEVEL, optical_zoom_val[opti_val]);
@@ -11875,6 +11908,26 @@ static int __devinit m9mo_probe(struct i2c_client *client,
 
 	sd = &state->sd;
 	strcpy(sd->name, M9MO_DRIVER_NAME);
+
+#ifdef CONFIG_MACH_SF2
+	/*
+	 * As Samsung's GC200 driver: hold the ISP's SPI MISO (GPB6) and NSS
+	 * (GPB5) low. We never use the SPI firmware path; left floating they
+	 * may be sampled by the ISP at power-up or back-power it.
+	 */
+	if (!gpio_request(EXYNOS4_GPB(6), "M9MO_SPI_MISO")) {
+		s3c_gpio_cfgpin(EXYNOS4_GPB(6), S3C_GPIO_OUTPUT);
+		s3c_gpio_setpull(EXYNOS4_GPB(6), S3C_GPIO_PULL_DOWN);
+		gpio_direction_output(EXYNOS4_GPB(6), 0);
+		gpio_free(EXYNOS4_GPB(6));
+	}
+	if (!gpio_request(EXYNOS4_GPB(5), "M9MO_SPI_NSS")) {
+		s3c_gpio_cfgpin(EXYNOS4_GPB(5), S3C_GPIO_OUTPUT);
+		s3c_gpio_setpull(EXYNOS4_GPB(5), S3C_GPIO_PULL_DOWN);
+		gpio_direction_output(EXYNOS4_GPB(5), 0);
+		gpio_free(EXYNOS4_GPB(5));
+	}
+#endif
 
 	/* Registering subdev */
 	v4l2_i2c_subdev_init(sd, client, &m9mo_ops);

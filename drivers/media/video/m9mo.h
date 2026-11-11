@@ -221,6 +221,12 @@ struct m9mo_exif {
 	int focal_35mm_length;
 };
 
+/*
+ * The ISP firmware version token plus its NUL: 6 characters on the GC100
+ * (FCGB04), 11 on the GC200 (D16FLHB03DA)
+ */
+#define M9MO_SENSOR_VER_SIZE	12
+
 struct m9mo_state {
 	struct m9mo_platform_data *pdata;
 	struct device *m9mo_dev;
@@ -270,7 +276,7 @@ struct m9mo_state {
 	struct m9mo_exif exif;
 
 	int isp_fw_ver;
-	u8 sensor_ver[10];
+	u8 sensor_ver[M9MO_SENSOR_VER_SIZE];
 	u8 phone_ver[10];
 	u8 sensor_type[25];
 
