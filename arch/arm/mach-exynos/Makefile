@@ -223,6 +223,7 @@ obj-$(CONFIG_P4NOTE_00_BD)		+= p4note-gpio.o p4note-power.o
 obj-$(CONFIG_KONA_00_BD)                += kona-gpio.o kona-power.o
 obj-$(CONFIG_KONA_01_BD)                += kona-01-gpio.o kona-01-power.o
 obj-$(CONFIG_GC1_00_BD)			+= gc1-gpio.o gc1-power.o gc1-jack.o
+obj-$(CONFIG_MACH_SF2)			+= sf2-nfc-field.o
 obj-$(CONFIG_MACH_T0)			+= t0-gpio.o t0-power.o
 obj-$(CONFIG_MACH_BAFFIN)			+= baffin-gpio.o baffin-power.o
 ifeq ($(CONFIG_MACH_M3),y)
