@@ -550,6 +550,29 @@ static int exynos4_usb_phy20_init(struct platform_device *pdev)
 
 	if (exynos4_usb_phy20_is_on()) {
 		dev_err(&pdev->dev, "Already power on PHY\n");
+		/*
+		 * The USB gadget keeps the shared PHY on while a cable is in,
+		 * so phy20_exit never powered the host side down and this
+		 * returned before its reset: an EHCI off/on (cbd's modem
+		 * recovery) then restarted the HSIC link without resetting
+		 * it, and the XMM6262 stayed off the bus until a reboot
+		 * (2026-11-12, docs/TODO.md). Reset the host link and PHY1
+		 * as the full path below does, but not PHY0, the gadget's.
+		 * OHCI comes up after EHCI; never reset under it.
+		 */
+		if (!strcmp(pdev->name, "s5p-ehci") &&
+		    !test_bit(HOST_PHY_OHCI, &usb_phy_control.usage)) {
+			rstcon = readl(EXYNOS4_RSTCON)
+				| EXYNOS4212_HOST_LINK_PORT_SWRST_MASK
+				| EXYNOS4212_PHY1_SWRST_MASK;
+			writel(rstcon, EXYNOS4_RSTCON);
+			udelay(10);
+			rstcon &= ~(EXYNOS4212_HOST_LINK_PORT_SWRST_MASK
+				| EXYNOS4212_PHY1_SWRST_MASK);
+			writel(rstcon, EXYNOS4_RSTCON);
+			udelay(80);
+			dev_info(&pdev->dev, "host link and PHY1 reset\n");
+		}
 		return 0;
 	}
 
