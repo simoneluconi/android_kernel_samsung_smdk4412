@@ -2298,18 +2298,24 @@ static int m9mo_get_sensor_fw_version(struct v4l2_subdev *sd)
 	return 0;
 }
 
-static int m9mo_get_phone_fw_version(struct v4l2_subdev *sd)
+/*
+ * The version of the ISP firmware file shipped with the phone, for the
+ * firmware update only (m9mo_check_fw). ver_tmp was left uninitialised
+ * when no file was found, which is always the case on our builds, and the
+ * copy below ran 20 bytes into the 7-byte phone_ver until it met a space.
+ */
+static int __maybe_unused m9mo_get_phone_fw_version(struct v4l2_subdev *sd)
 {
 	struct m9mo_state *state = to_state(sd);
 	struct device *dev = sd->v4l2_dev->dev;
-	const struct firmware *fw;
+	const struct firmware *fw = NULL;
 	int err = 0;
 
 	struct file *fp;
 	mm_segment_t old_fs;
 	long nread;
 	int fw_requested = 1;
-	char ver_tmp[20];
+	char ver_tmp[M9MO_FW_VER_LEN + 1] = {0,};
 	char phone_ver[7];
 	int i = 0;
 
@@ -2401,6 +2407,12 @@ request_fw:
 		sprintf(state->phone_ver, "FU%x", ver_tmp);
 #endif
 
+		if (fw->size < M9MO_FW_VER_NUM + M9MO_FW_VER_LEN) {
+			cam_err("firmware file too short, %zu bytes\n",
+				fw->size);
+			err = -EINVAL;
+			goto out;
+		}
 		for (i = 0; i < M9MO_FW_VER_LEN; i++) {
 			if ((int)fw->data[M9MO_FW_VER_NUM+i] == 0x00)
 				break;
@@ -2410,22 +2422,18 @@ request_fw:
 	}
 out:
 
-	ver_tmp[M9MO_FW_VER_LEN-1] = '\0';
+	ver_tmp[sizeof(ver_tmp) - 1] = '\0';
 
-	for (i = 0; i < M9MO_FW_VER_LEN; i++) {
-		if (ver_tmp[i] == 0x20) {
-			phone_ver[i] = '\0';
-			/*cam_info("phone_ver = %s\n", phone_ver);*/
-			break;
-		}
+	/* the version token runs up to the first space */
+	for (i = 0; i < sizeof(phone_ver) - 1 && ver_tmp[i] &&
+			ver_tmp[i] != 0x20; i++)
 		phone_ver[i] = ver_tmp[i];
-	}
+	phone_ver[i] = '\0';
 
 	cam_info("ver_tmp = %s\n", ver_tmp);
 	cam_info("phone_ver = %s\n", phone_ver);
-	sprintf(state->phone_ver, "%s", phone_ver);
-	memcpy(sysfs_phone_fw, state->phone_ver,
-				sizeof(state->phone_ver));
+	strlcpy(state->phone_ver, phone_ver, sizeof(state->phone_ver));
+	strlcpy(sysfs_phone_fw, state->phone_ver, sizeof(sysfs_phone_fw));
 
 	if (!fw_requested) {
 		filp_close(fp, current->files);
@@ -2454,8 +2462,14 @@ static int m9mo_check_fw(struct v4l2_subdev *sd)
 
 	cam_trace("E\n");
 
-	/* F/W version */
+	/*
+	 * F/W version. The phone's firmware file matters only for the update,
+	 * which this kernel refuses without CONFIG_VIDEO_M9MO_FW_UPDATE; we
+	 * ship no file, and looking for it cost ~130 ms on every camera start.
+	 */
+#ifdef CONFIG_VIDEO_M9MO_FW_UPDATE
 	m9mo_get_phone_fw_version(sd);
+#endif
 
 #if 0
 	if (state->isp.bad_fw)
