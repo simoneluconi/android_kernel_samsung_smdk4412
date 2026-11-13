@@ -2351,8 +2351,16 @@ int sdhci_suspend_host(struct sdhci_host *host, pm_message_t state)
 			if (host->ops->set_power)
 				host->ops->set_power(0);
 #endif
-			ret = regulator_disable(host->vmmc);
-			pr_info("%s : MMC Card OFF\n", __func__);
+			/*
+			 * A failed disable (an unbalanced one) must not
+			 * abort the system suspend: the card is already
+			 * powered off by mmc_suspend_host().
+			 */
+			if (regulator_disable(host->vmmc))
+				pr_warn("%s : %s: supply disable failed\n",
+					__func__, mmc_hostname(host->mmc));
+			else
+				pr_info("%s : MMC Card OFF\n", __func__);
 		}
 	}
 
@@ -2907,6 +2915,27 @@ int sdhci_add_host(struct sdhci_host *host)
 #endif
 				regulator_enable(host->vmmc);
 				mdelay(100);
+			} else if (regulator_is_enabled(host->vmmc)) {
+				/*
+				 * No card, but the bootloader left the supply
+				 * on with no consumer counted (the core leaves
+				 * it on: "incomplete constraints"). Take it and
+				 * switch it off, so that its state matches our
+				 * use count. Otherwise every later
+				 * regulator_disable() here is unbalanced, and
+				 * the failed disable in sdhci_suspend_host()
+				 * aborts every system suspend.
+				 */
+#ifdef CONFIG_MIDAS_COMMON
+				if (host->ops->set_power)
+					host->ops->set_power(0);
+#endif
+				regulator_enable(host->vmmc);
+				regulator_disable(host->vmmc);
+				pr_info("%s: no card, %s switched off\n",
+					mmc_hostname(mmc),
+					host->vmmc_name ? host->vmmc_name :
+					"vmmc");
 			}
 		}
 	}
