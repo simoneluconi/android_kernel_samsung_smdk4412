@@ -941,13 +941,8 @@ int s5p_mixer_ctrl_start(
 
 		switch (disp) {
 
+		/* 720x480 4:3 is CEA VIC 2: limited-range RGB like the others */
 		case TVOUT_480P_60_4_3:
-			if (s5p_tvif_get_q_range() || out == TVOUT_HDMI_RGB)
-				csc = MIXER_RGB601_0_255;
-			else
-				csc = MIXER_RGB601_16_235;
-			csc_for_coeff = MIXER_RGB601_0_255;
-			break;
 		case TVOUT_480P_60_16_9:
 		case TVOUT_480P_59:
 		case TVOUT_576P_50_16_9:
@@ -1027,8 +1022,7 @@ int s5p_mixer_ctrl_start(
 		mixer_video_limiter = false;
 #else
 	/* full range */
-	if ((out == TVOUT_HDMI_RGB && disp == TVOUT_480P_60_4_3) ||
-		(out != TVOUT_HDMI_RGB && s5p_tvif_get_q_range())) {
+	if (out != TVOUT_HDMI_RGB && s5p_tvif_get_q_range()) {
 		mixer_video_limiter = false;
 		for (i = MIXER_BG_COLOR_0; i <= MIXER_BG_COLOR_2; i++)
 			s5p_mixer_ctrl_private.bg_color[i].color_y = 0;

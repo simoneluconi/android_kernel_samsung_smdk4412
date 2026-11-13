@@ -2105,13 +2105,13 @@ static void s5p_hdmi_set_avi(
 	if (s5p_tvif_ctrl_private.curr_if == TVOUT_HDMI_RGB) {
 		avi[0] |= (0x1 << 4);
 		avi[4] |= frame.repetition;
-		if (s5p_tvif_ctrl_private.curr_std == TVOUT_480P_60_4_3) {
-			avi[2] |= HDMI_Q_DEFAULT << 2;
-			avi[4] |= HDMI_AVI_YQ_FULL_RANGE << 6;
-		} else {
-			avi[2] |= HDMI_Q_DEFAULT << 2;
-			avi[4] |= HDMI_AVI_YQ_LIMITED_RANGE << 6;
-		}
+		/*
+		 * Every mode here is a CEA-861 video format (720x480 4:3 is
+		 * VIC 2, not 640x480 VGA), so RGB is limited range, the
+		 * default a sink assumes.
+		 */
+		avi[2] |= HDMI_Q_DEFAULT << 2;
+		avi[4] |= HDMI_AVI_YQ_LIMITED_RANGE << 6;
 	} else {
 		avi[0] |= (0x5 << 4);
 		avi[4] |= frame.repetition;
@@ -2744,17 +2744,8 @@ static void s5p_tvif_ctrl_internal_start(
 	case TVOUT_DVI:
 #ifdef	__CONFIG_HDMI_SUPPORT_FULL_RANGE__
 	switch (std) {
+	/* 720x480 4:3 is CEA VIC 2: limited-range RGB like the others */
 	case TVOUT_480P_60_4_3:
-		if (inf == TVOUT_HDMI_RGB) /* full range */
-			s5p_hdmi_output[inf].reg.pxl_limit =
-				S5P_HDMI_PX_LMT_CTRL_BYPASS;
-		else if (s5p_tvif_get_q_range()) /* full range */
-			s5p_hdmi_output[inf].reg.pxl_limit =
-				S5P_HDMI_PX_LMT_CTRL_BYPASS;
-		else /* limited range */
-			s5p_hdmi_output[inf].reg.pxl_limit =
-				S5P_HDMI_PX_LMT_CTRL_YPBPR;
-		break;
 	case TVOUT_480P_60_16_9:
 	case TVOUT_480P_59:
 	case TVOUT_576P_50_16_9:
