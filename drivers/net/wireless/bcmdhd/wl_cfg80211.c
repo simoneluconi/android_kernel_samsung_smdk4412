@@ -11040,6 +11040,17 @@ s32 wl_update_wiphybands(struct bcm_cfg80211 *cfg, bool notify)
 
 	for (i = 1; i <= nband && i < ARRAYSIZE(bandlist); i++) {
 		index = -1;
+#ifdef CONFIG_MACH_GC1
+		/*
+		 * Galaxy Camera: 2.4 GHz only. Its 5 GHz radio receives but never
+		 * gets an 802.11 auth frame acknowledged (GC100 and GC200, our stack
+		 * and Samsung's stock one alike), and Android kept trying the
+		 * stronger 5 GHz BSSIDs of a network instead of its 2.4 GHz ones.
+		 * Without a 5 GHz band in the wiphy nobody scans or joins there.
+		 */
+		if (bandlist[i] == WLC_BAND_5G)
+			continue;
+#endif
 		if (bandlist[i] == WLC_BAND_5G && __wl_band_5ghz_a.n_channels > 0) {
 			bands[IEEE80211_BAND_5GHZ] =
 				&__wl_band_5ghz_a;
@@ -11117,6 +11128,21 @@ static s32 __wl_cfg80211_up(struct bcm_cfg80211 *cfg)
 			return err;
 		}
 	}
+#ifdef CONFIG_MACH_GC1
+	/*
+	 * The firmware too: its own roam scans and joins stay on 2.4 GHz (see
+	 * above). The plain ioctl, not wldev_set_band(): that one calls back into
+	 * wl_update_wiphybands(), which deadlocks while this up is in progress.
+	 */
+	{
+		u32 band = htod32(WLC_BAND_2G);
+
+		if (wldev_ioctl(ndev, WLC_SET_BAND, &band, sizeof(band), true))
+			WL_ERR(("2.4 GHz only: setting the band failed\n"));
+		else
+			printk(KERN_INFO "wl_cfg80211: 2.4 GHz only\n");
+	}
+#endif
 
 	err = dhd_monitor_init(cfg->pub);
 
